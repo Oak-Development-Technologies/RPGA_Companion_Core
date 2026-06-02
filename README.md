@@ -6,7 +6,7 @@ interface for low-latency sample handling and small hardware-side chores.
 
 This version is intentionally trimmed for the U4K-class resource budget. The
 core keeps the highest value features per logic cell: SPI registers, IRQ flags,
-an 8-word sample FIFO, shift-based EMA smoothing, threshold detection, simple
+a 128-word sample FIFO, shift-based EMA smoothing, threshold detection, simple
 stats, pulse timing on `P13`/`P20`, and RGB PWM. The earlier Kalman, CRC32, and
 mailbox blocks were removed because they cost too much fabric for the
 iCE5LP4K.
@@ -58,7 +58,7 @@ Sample values use signed Q16.16 fixed-point format.
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x00050000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x00060000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` drive RGB when PWM is off; bit 8 selects legacy `data_out` |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -66,8 +66,8 @@ Sample values use signed Q16.16 fixed-point format.
 | `0x06` | `SPI_COUNT` | RO | Counts completed 48-bit SPI transactions |
 | `0x07` | `IRQ_STATUS` | RW1C | IRQ flags; write `1` bits to clear |
 | `0x08` | `IRQ_ENABLE` | RW | IRQ enable mask driving `data_out` |
-| `0x09` | `FIFO_STATUS` | RO | Count plus empty/full/overflow flags |
-| `0x0A` | `FIFO_WRITE` | WO | Push one Q16.16 sample into the 8-word FIFO |
+| `0x09` | `FIFO_STATUS` | RO | Bits `[8:0]` count, bit 9 full, bit 10 empty, bit 11 overflow |
+| `0x0A` | `FIFO_WRITE` | WO | Push one Q16.16 sample into the 128-word FIFO |
 | `0x0B` | `FIFO_READ` | RO | Peek oldest FIFO sample |
 | `0x0C` | `FIFO_CONTROL` | WO | Bit 0 pop, bit 1 clear, bit 2 process one sample |
 | `0x10` | `ALGO_CONTROL` | RW | Bit 0 enables processing, bit 1 resets processing, bit 8 processes one FIFO sample |
@@ -133,6 +133,11 @@ to hard multiplier resources where the selected iCE40 target supports them.
 This pruned core currently avoids general multipliers and uses a shift-based EMA
 to reduce LUT pressure.
 
+The FIFO storage lives in [rtl/ram.v](rtl/ram.v) as a synchronous 128x32 RAM
+with a block-RAM inference attribute. In the Yosys/nextpnr reports, this should
+show up as inferred iCE40 RAM, such as `ICESTORM_RAM`/`SB_RAM40_4K`, instead of
+distributed registers or LUT memory.
+
 ## CircuitPython Usage
 
 Copy [circuitpython/rpga_companion.py](circuitpython/rpga_companion.py) to your
@@ -150,7 +155,7 @@ cs = digitalio.DigitalInOut(board.D10)
 fpga = RPGACompanion(spi, cs)
 
 print(hex(fpga.core_id))      # 0x52504741
-print(hex(fpga.version))      # 0x00050000
+print(hex(fpga.version))      # 0x00060000
 
 fpga.algorithm_mask = ALGO_EMA | ALGO_THRESHOLD | ALGO_STATS
 fpga.configure_ema(alpha=0.25, value=0.0)

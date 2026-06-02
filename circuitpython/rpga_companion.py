@@ -157,10 +157,10 @@ class RPGACompanion:
     def fifo_status(self):
         value = self.read_u32(REG_FIFO_STATUS)
         return {
-            "count": value & 0x1F,
-            "full": bool(value & (1 << 8)),
-            "empty": bool(value & (1 << 9)),
-            "overflow": bool(value & (1 << 10)),
+            "count": value & 0x1FF,
+            "full": bool(value & (1 << 9)),
+            "empty": bool(value & (1 << 10)),
+            "overflow": bool(value & (1 << 11)),
         }
 
     def fifo_write(self, value, *, process_now=False):

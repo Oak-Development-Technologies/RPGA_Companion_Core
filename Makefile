@@ -3,7 +3,7 @@ TOP := rpga_companion_core
 DEVICE ?= u4k
 PACKAGE ?= sg48
 PCF := common/io.pcf
-RTL := rtl/rpga_companion_core.v
+RTL := rtl/ram.v rtl/rpga_companion_core.v
 BUILD := build
 
 .PHONY: all clean prog timing
@@ -14,7 +14,7 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/$(PROJECT).json: $(RTL) | $(BUILD)
-	yosys -p "synth_ice40 -dsp -top $(TOP) -json $@" $(RTL)
+	yosys -p "synth_ice40 -dsp -abc2 -top $(TOP) -json $@" $(RTL)
 
 $(BUILD)/$(PROJECT).asc: $(BUILD)/$(PROJECT).json $(PCF)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD)/$(PROJECT).json --pcf $(PCF) --asc $@

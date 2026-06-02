@@ -123,7 +123,8 @@ module rpga_spi_registers (
     localparam IRQ_THRESHOLD = 2;
     localparam IRQ_SAMPLE_PROCESSED = 3;
 
-    localparam [3:0] FIFO_DEPTH = 4'd8;
+    localparam FIFO_ADDR_WIDTH = 7;
+    localparam [8:0] FIFO_DEPTH = 9'd128;
 
     reg [5:0] bit_count = 6'd0;
     reg [7:0] command = 8'h00;
@@ -138,10 +139,16 @@ module rpga_spi_registers (
     reg [15:0] irq_status = 16'h0000;
     reg [15:0] irq_enable = 16'h0000;
 
-    reg signed [31:0] fifo [0:FIFO_DEPTH-1];
-    reg [2:0] fifo_rd = 3'd0;
-    reg [2:0] fifo_wr = 3'd0;
-    reg [3:0] fifo_count = 4'd0;
+    reg [FIFO_ADDR_WIDTH-1:0] fifo_rd = {FIFO_ADDR_WIDTH{1'b0}};
+    reg [FIFO_ADDR_WIDTH-1:0] fifo_wr = {FIFO_ADDR_WIDTH{1'b0}};
+    reg [8:0] fifo_count = 9'd0;
+    wire [31:0] fifo_rdata;
+    wire [31:0] spi_write_value = {write_shift[30:0], mosi};
+    wire fifo_push_decode = !ss &&
+        (bit_count == 6'd47) &&
+        (command == CMD_WRITE) &&
+        (address == REG_FIFO_WRITE) &&
+        (fifo_count != FIFO_DEPTH);
 
     reg [15:0] algo_control = 16'h0001;
     reg [15:0] algo_enable = 16'h0007;
@@ -182,6 +189,18 @@ module rpga_spi_registers (
 
     reg signed [31:0] sample_value = 32'sh00000000;
     reg signed [63:0] sample_extended = 64'sh0000000000000000;
+
+    rpga_sync_ram #(
+        .ADDR_WIDTH(FIFO_ADDR_WIDTH),
+        .DATA_WIDTH(32)
+    ) fifo_ram (
+        .clk(sck),
+        .we(fifo_push_decode),
+        .waddr(fifo_wr),
+        .wdata(spi_write_value),
+        .raddr(fifo_rd),
+        .rdata(fifo_rdata)
+    );
 
     assign miso = ss ? 1'bz : miso_bit;
     assign irq_out = |(irq_status & irq_enable);
@@ -232,9 +251,8 @@ module rpga_spi_registers (
             fifo_status_word = {
                 20'd0,
                 irq_status[IRQ_FIFO_OVERFLOW],
-                (fifo_count == 4'd0),
+                (fifo_count == 9'd0),
                 (fifo_count == FIFO_DEPTH),
-                5'd0,
                 fifo_count
             };
         end
@@ -245,7 +263,7 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741;
-                REG_VERSION: read_register = 32'h00050000;
+                REG_VERSION: read_register = 32'h00060000;
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;
@@ -255,7 +273,7 @@ module rpga_spi_registers (
                 REG_IRQ_ENABLE: read_register = {16'd0, irq_enable};
                 REG_FIFO_STATUS: read_register = fifo_status_word();
                 REG_FIFO_WRITE: read_register = 32'h00000000;
-                REG_FIFO_READ: read_register = (fifo_count == 4'd0) ? 32'h00000000 : fifo[fifo_rd];
+                REG_FIFO_READ: read_register = (fifo_count == 9'd0) ? 32'h00000000 : fifo_rdata;
                 REG_FIFO_CONTROL: read_register = 32'h00000000;
                 REG_ALGO_CONTROL: read_register = {16'd0, algo_control};
                 REG_ALGO_STATUS: read_register = {16'd0, algo_enable};
@@ -297,23 +315,21 @@ module rpga_spi_registers (
 
     task clear_fifo;
         begin
-            fifo_rd <= 3'd0;
-            fifo_wr <= 3'd0;
-            fifo_count <= 4'd0;
+            fifo_rd <= {FIFO_ADDR_WIDTH{1'b0}};
+            fifo_wr <= {FIFO_ADDR_WIDTH{1'b0}};
+            fifo_count <= 9'd0;
             irq_status[IRQ_FIFO_NOT_EMPTY] <= 1'b0;
             irq_status[IRQ_FIFO_OVERFLOW] <= 1'b0;
         end
     endtask
 
     task fifo_push;
-        input signed [31:0] value;
         begin
             if (fifo_count == FIFO_DEPTH) begin
                 irq_status[IRQ_FIFO_OVERFLOW] <= 1'b1;
             end else begin
-                fifo[fifo_wr] <= value;
-                fifo_wr <= fifo_wr + 3'd1;
-                fifo_count <= fifo_count + 4'd1;
+                fifo_wr <= fifo_wr + {{(FIFO_ADDR_WIDTH-1){1'b0}}, 1'b1};
+                fifo_count <= fifo_count + 9'd1;
                 irq_status[IRQ_FIFO_NOT_EMPTY] <= 1'b1;
             end
         end
@@ -321,10 +337,10 @@ module rpga_spi_registers (
 
     task fifo_pop;
         begin
-            if (fifo_count != 4'd0) begin
-                fifo_rd <= fifo_rd + 3'd1;
-                fifo_count <= fifo_count - 4'd1;
-                if (fifo_count == 4'd1) begin
+            if (fifo_count != 9'd0) begin
+                fifo_rd <= fifo_rd + {{(FIFO_ADDR_WIDTH-1){1'b0}}, 1'b1};
+                fifo_count <= fifo_count - 9'd1;
+                if (fifo_count == 9'd1) begin
                     irq_status[IRQ_FIFO_NOT_EMPTY] <= 1'b0;
                 end
             end
@@ -418,13 +434,13 @@ module rpga_spi_registers (
             if (bit_count == 6'd47) begin
                 transaction_count <= transaction_count + 32'd1;
                 if (command == CMD_WRITE) begin
-                    write_value = {write_shift[30:0], mosi};
+                    write_value = spi_write_value;
                     case (address)
                         REG_SCRATCH: scratch <= write_value;
                         REG_CONTROL: control <= write_value;
                         REG_IRQ_STATUS: irq_status <= irq_status & ~write_value[15:0];
                         REG_IRQ_ENABLE: irq_enable <= write_value[15:0];
-                        REG_FIFO_WRITE: fifo_push(write_value);
+                        REG_FIFO_WRITE: fifo_push;
                         REG_FIFO_CONTROL: begin
                             if (write_value[0]) begin
                                 fifo_pop;
@@ -432,8 +448,8 @@ module rpga_spi_registers (
                             if (write_value[1]) begin
                                 clear_fifo;
                             end
-                            if (write_value[2] && fifo_count != 4'd0) begin
-                                process_sample(fifo[fifo_rd]);
+                            if (write_value[2] && fifo_count != 9'd0) begin
+                                process_sample(fifo_rdata);
                                 fifo_pop;
                             end
                         end
@@ -442,8 +458,8 @@ module rpga_spi_registers (
                             if (write_value[1]) begin
                                 reset_processing;
                             end
-                            if (write_value[8] && fifo_count != 4'd0) begin
-                                process_sample(fifo[fifo_rd]);
+                            if (write_value[8] && fifo_count != 9'd0) begin
+                                process_sample(fifo_rdata);
                                 fifo_pop;
                             end
                         end
