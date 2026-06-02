@@ -1,3 +1,5 @@
+import os
+
 import cocotb
 from cocotb.triggers import Timer
 
@@ -31,6 +33,7 @@ REG_KALMAN_RESIDUAL = 0x46
 REG_KALMAN_COUNT = 0x47
 
 IRQ_CPU = 0x01
+HAS_KALMAN_COVARIANCE = os.getenv("KALMAN_COVARIANCE") == "1"
 
 
 def instr(opcode, rd=0, rs=0, rt=0, imm=0):
@@ -135,7 +138,8 @@ async def spi_registers_scratch_and_gpio(dut):
     await spi.init()
 
     assert await spi.read_u32(REG_ID) == 0x52504741
-    assert await spi.read_u32(REG_VERSION) == 0x000E0000
+    expected_version = 0x000F0001 if HAS_KALMAN_COVARIANCE else 0x000F0000
+    assert await spi.read_u32(REG_VERSION) == expected_version
 
     await spi.write_u32(REG_SCRATCH, 0xA5A55A5A)
     assert await spi.read_u32(REG_SCRATCH) == 0xA5A55A5A
@@ -207,8 +211,12 @@ async def kalman_uses_q0_16_gain(dut):
     await spi.write_u32(REG_KALMAN_SAMPLE, to_q16(8.0))
 
     assert await spi.read_u32(REG_KALMAN_GAIN) == 0x2000
-    assert from_q16(await spi.read_u32(REG_KALMAN_PROCESS_NOISE)) == 0.25
     assert from_q16(await spi.read_u32(REG_KALMAN_RESIDUAL)) == 8.0
     assert from_q16(await spi.read_u32(REG_KALMAN_ESTIMATE)) == 1.0
-    assert from_q16(await spi.read_u32(REG_KALMAN_COVARIANCE)) == 1.125
+    if HAS_KALMAN_COVARIANCE:
+        assert from_q16(await spi.read_u32(REG_KALMAN_PROCESS_NOISE)) == 0.25
+        assert from_q16(await spi.read_u32(REG_KALMAN_COVARIANCE)) == 1.125
+    else:
+        assert await spi.read_u32(REG_KALMAN_PROCESS_NOISE) == 0
+        assert await spi.read_u32(REG_KALMAN_COVARIANCE) == 0
     assert await spi.read_u32(REG_KALMAN_COUNT) == 1

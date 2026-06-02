@@ -207,26 +207,32 @@ module rpga_spi_registers (
     reg [15:0] kalman_gain = 16'h2000;
     reg signed [15:0] kalman_estimate = 16'sh0000;
     reg signed [15:0] kalman_residual = 16'sh0000;
+`ifdef RPGA_KALMAN_COVARIANCE
     reg [15:0] kalman_covariance = 16'h0100;
     reg [15:0] kalman_process_noise = 16'h0001;
+`endif
     reg [15:0] kalman_count = 16'h0000;
     wire signed [15:0] kalman_next_sample;
     wire signed [15:0] kalman_next_delta;
     wire signed [31:0] kalman_gain_product;
     wire signed [15:0] kalman_correction;
+`ifdef RPGA_KALMAN_COVARIANCE
     wire [31:0] kalman_covariance_product;
     wire [15:0] kalman_covariance_drop;
     wire [16:0] kalman_covariance_after_gain;
     wire [16:0] kalman_covariance_next;
+`endif
 
     assign miso = ss ? 1'bz : miso_bit;
     assign irq_out = |(irq_status & irq_enable);
     assign kalman_next_sample = q16_to_q8(spi_write_value);
     assign kalman_next_delta = kalman_next_sample - kalman_estimate;
     assign kalman_correction = kalman_gain_product[31:16];
+`ifdef RPGA_KALMAN_COVARIANCE
     assign kalman_covariance_drop = kalman_covariance_product[31:16];
     assign kalman_covariance_after_gain = (kalman_covariance > kalman_covariance_drop) ? (kalman_covariance - kalman_covariance_drop) : 17'd0;
     assign kalman_covariance_next = kalman_covariance_after_gain + kalman_process_noise;
+`endif
 
     wire [7:0] imem_raddr = cpu_running ? cpu_imem_addr : imem_addr_spi;
     wire [7:0] dmem_raddr = cpu_running ? cpu_dmem_addr : dmem_addr_spi;
@@ -286,12 +292,14 @@ module rpga_spi_registers (
         .y(kalman_gain_product)
     );
 
+`ifdef RPGA_KALMAN_COVARIANCE
     rpga_ice40_dsp_mul16_unsigned_unsigned kalman_covariance_mul (
         .clk(sck),
         .a(kalman_covariance),
         .b(kalman_gain),
         .y(kalman_covariance_product)
     );
+`endif
 
     always @(posedge clk) begin
         p13_d <= p13;
@@ -339,7 +347,11 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741;
-                REG_VERSION: read_register = 32'h000E0000;
+`ifdef RPGA_KALMAN_COVARIANCE
+                REG_VERSION: read_register = 32'h000F0001;
+`else
+                REG_VERSION: read_register = 32'h000F0000;
+`endif
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;
@@ -368,9 +380,17 @@ module rpga_spi_registers (
                 REG_PULSE_CONTROL: read_register = 32'h00000000;
                 REG_KALMAN_CONTROL: read_register = {31'd0, kalman_enable};
                 REG_KALMAN_GAIN: read_register = {16'd0, kalman_gain};
+`ifdef RPGA_KALMAN_COVARIANCE
                 REG_KALMAN_PROCESS_NOISE: read_register = uq8_to_q16(kalman_process_noise);
+`else
+                REG_KALMAN_PROCESS_NOISE: read_register = 32'h00000000;
+`endif
                 REG_KALMAN_ESTIMATE: read_register = q8_to_q16(kalman_estimate);
+`ifdef RPGA_KALMAN_COVARIANCE
                 REG_KALMAN_COVARIANCE: read_register = uq8_to_q16(kalman_covariance);
+`else
+                REG_KALMAN_COVARIANCE: read_register = 32'h00000000;
+`endif
                 REG_KALMAN_SAMPLE: read_register = 32'h00000000;
                 REG_KALMAN_RESIDUAL: read_register = q8_to_q16(kalman_residual);
                 REG_KALMAN_COUNT: read_register = {16'd0, kalman_count};
@@ -393,6 +413,7 @@ module rpga_spi_registers (
         end
     endfunction
 
+`ifdef RPGA_KALMAN_COVARIANCE
     function [31:0] uq8_to_q16;
         input [15:0] value;
         begin
@@ -406,12 +427,15 @@ module rpga_spi_registers (
             q16_to_uq8 = value[31] ? 16'h0000 : (|value[30:24] ? 16'hffff : value[23:8]);
         end
     endfunction
+`endif
 
     task reset_kalman;
         begin
             kalman_estimate <= 16'sh0000;
             kalman_residual <= 16'sh0000;
+`ifdef RPGA_KALMAN_COVARIANCE
             kalman_covariance <= 16'h0100;
+`endif
             kalman_count <= 16'h0000;
         end
     endtask
@@ -466,14 +490,20 @@ module rpga_spi_registers (
                             end
                         end
                         REG_KALMAN_GAIN: kalman_gain <= write_value[15:0];
+`ifdef RPGA_KALMAN_COVARIANCE
                         REG_KALMAN_PROCESS_NOISE: kalman_process_noise <= q16_to_uq8(write_value);
+`endif
                         REG_KALMAN_ESTIMATE: kalman_estimate <= q16_to_q8(write_value);
+`ifdef RPGA_KALMAN_COVARIANCE
                         REG_KALMAN_COVARIANCE: kalman_covariance <= q16_to_uq8(write_value);
+`endif
                         REG_KALMAN_SAMPLE: begin
                             if (kalman_enable) begin
                                 kalman_residual <= kalman_next_delta;
                                 kalman_estimate <= kalman_estimate + kalman_correction;
+`ifdef RPGA_KALMAN_COVARIANCE
                                 kalman_covariance <= kalman_covariance_next[16] ? 16'hffff : kalman_covariance_next[15:0];
+`endif
                                 kalman_count <= kalman_count + 16'd1;
                             end
                         end

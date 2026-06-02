@@ -3,6 +3,12 @@ SIM ?= icarus
 
 TOPLEVEL := rpga_companion_core
 MODULE := test_rpga_companion
+KALMAN_COVARIANCE ?= 0
+export KALMAN_COVARIANCE
+
+ifeq ($(KALMAN_COVARIANCE),1)
+COMPILE_ARGS += -D RPGA_KALMAN_COVARIANCE
+endif
 
 ROOT := $(abspath ..)
 VERILOG_SOURCES += $(ROOT)/sim/ice40_cells_sim.v
