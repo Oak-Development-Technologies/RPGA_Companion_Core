@@ -23,7 +23,9 @@ REG_DMEM_ADDR = 0x22
 REG_DMEM_DATA = 0x23
 
 REG_KALMAN_GAIN = 0x41
+REG_KALMAN_PROCESS_NOISE = 0x42
 REG_KALMAN_ESTIMATE = 0x43
+REG_KALMAN_COVARIANCE = 0x44
 REG_KALMAN_SAMPLE = 0x45
 REG_KALMAN_RESIDUAL = 0x46
 REG_KALMAN_COUNT = 0x47
@@ -133,7 +135,7 @@ async def spi_registers_scratch_and_gpio(dut):
     await spi.init()
 
     assert await spi.read_u32(REG_ID) == 0x52504741
-    assert await spi.read_u32(REG_VERSION) == 0x000D0000
+    assert await spi.read_u32(REG_VERSION) == 0x000E0000
 
     await spi.write_u32(REG_SCRATCH, 0xA5A55A5A)
     assert await spi.read_u32(REG_SCRATCH) == 0xA5A55A5A
@@ -199,10 +201,14 @@ async def kalman_uses_q0_16_gain(dut):
     await spi.init()
 
     await spi.write_u32(REG_KALMAN_GAIN, 0x2000)
+    await spi.write_u32(REG_KALMAN_PROCESS_NOISE, to_q16(0.25))
     await spi.write_u32(REG_KALMAN_ESTIMATE, to_q16(0.0))
+    await spi.write_u32(REG_KALMAN_COVARIANCE, to_q16(1.0))
     await spi.write_u32(REG_KALMAN_SAMPLE, to_q16(8.0))
 
     assert await spi.read_u32(REG_KALMAN_GAIN) == 0x2000
+    assert from_q16(await spi.read_u32(REG_KALMAN_PROCESS_NOISE)) == 0.25
     assert from_q16(await spi.read_u32(REG_KALMAN_RESIDUAL)) == 8.0
     assert from_q16(await spi.read_u32(REG_KALMAN_ESTIMATE)) == 1.0
+    assert from_q16(await spi.read_u32(REG_KALMAN_COVARIANCE)) == 1.125
     assert await spi.read_u32(REG_KALMAN_COUNT) == 1

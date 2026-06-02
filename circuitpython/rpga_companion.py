@@ -226,8 +226,12 @@ class RPGACompanion:
     def configure_kalman(self, *, gain=None, process_noise=None, estimate=None, covariance=None):
         if gain is not None:
             self.write_u32(REG_KALMAN_GAIN, self._gain_to_q0_16(gain))
+        if process_noise is not None:
+            self.write_q16(REG_KALMAN_PROCESS_NOISE, self._clamp_unsigned_q8(process_noise))
         if estimate is not None:
             self.write_q16(REG_KALMAN_ESTIMATE, estimate)
+        if covariance is not None:
+            self.write_q16(REG_KALMAN_COVARIANCE, self._clamp_unsigned_q8(covariance))
 
     def push_kalman_sample(self, sample):
         self.write_q16(REG_KALMAN_SAMPLE, sample)
@@ -239,7 +243,7 @@ class RPGACompanion:
 
     @property
     def kalman_covariance(self):
-        return 0
+        return self.read_q16(REG_KALMAN_COVARIANCE)
 
     @property
     def kalman_residual(self):
@@ -291,6 +295,14 @@ class RPGACompanion:
         if gain >= 1:
             return 0xFFFF
         return int(gain * _Q16_SCALE) & 0xFFFF
+
+    @staticmethod
+    def _clamp_unsigned_q8(value):
+        if value <= 0:
+            return 0
+        if value >= 255.99609375:
+            return 255.99609375
+        return value
 
 
 def instr(opcode, rd=0, rs=0, rt=0, imm=0):

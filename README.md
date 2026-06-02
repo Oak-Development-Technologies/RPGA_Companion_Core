@@ -61,7 +61,7 @@ Commands:
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x000D0000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x000E0000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` direct RGB, bit 8 legacy `data_out`, bit 9 CPU RGB |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -90,9 +90,9 @@ Commands:
 | `0x34` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters |
 | `0x40` | `KALMAN_CONTROL` | RW | Bit 0 enable, bit 1 reset state |
 | `0x41` | `KALMAN_GAIN` | RW | Unsigned Q0.16 gain; correction uses one `SB_MAC16` |
-| `0x42` | `KALMAN_PROCESS_NOISE` | Stub, reads `0` |
+| `0x42` | `KALMAN_PROCESS_NOISE` | RW | Unsigned Q16.16 process noise, stored internally as UQ8.8 |
 | `0x43` | `KALMAN_ESTIMATE` | RW | Signed Q16.16 estimate, stored internally as Q8.8 |
-| `0x44` | `KALMAN_COVARIANCE` | Stub, reads `0` |
+| `0x44` | `KALMAN_COVARIANCE` | RW | Unsigned Q16.16 covariance, stored internally as UQ8.8 |
 | `0x45` | `KALMAN_SAMPLE` | WO | Signed Q16.16 sample; writing updates the filter |
 | `0x46` | `KALMAN_RESIDUAL` | RO | Signed Q16.16 previous residual, stored internally as Q8.8 |
 | `0x47` | `KALMAN_COUNT` | RO | Number of accepted samples |
@@ -161,21 +161,22 @@ Only the divider itself runs from the raw 48 MHz oscillator.
 ## Kalman Accelerator
 
 The Kalman block is separate from the tiny CPU and is controlled directly over
-SPI. To fit the U4K fabric budget, it is now a Kalman-like fixed-gain estimator:
-it keeps estimate, residual, and sample count, but drops covariance tracking.
-The SPI API uses signed Q16.16, but the internal estimator state is narrowed to
-signed Q8.8 to save logic. This keeps roughly `-128.0` to `+127.996` of useful
-range with 1/256 resolution:
+SPI. To fit the U4K fabric budget, it is a compact fixed-gain estimator. The
+estimate and residual use signed Q16.16 at the SPI boundary and signed Q8.8
+internally, which keeps roughly `-128.0` to `+127.996` of useful range with
+1/256 resolution. Covariance and process noise use unsigned Q16.16 at the SPI
+boundary and unsigned Q8.8 internally:
 
 ```text
 residual = sample - estimate
 correction = (residual * gain_q0_16) >> 16
 estimate = estimate + correction
+covariance = covariance + process_noise - ((covariance * gain_q0_16) >> 16)
 ```
 
 For example, `gain=0.125` writes `0x2000` to `KALMAN_GAIN`. The correction
-multiply is an explicit signed-residual by unsigned-gain `SB_MAC16` instance,
-which should show up as DSP usage in the oss-cad-suite synthesis report.
+multiply and covariance drop are explicit `SB_MAC16` instances, which should
+show up as DSP usage in the oss-cad-suite synthesis report.
 
 ## Build
 

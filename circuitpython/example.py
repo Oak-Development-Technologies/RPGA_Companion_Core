@@ -83,7 +83,13 @@ print("data[2]:", fpga.read_data_word(2))
 
 fpga.configure_kalman(gain=0.125, process_noise=0.01, estimate=0.0, covariance=1.0)
 for sample in (10.0, 10.5, 9.75, 11.0):
-    print("kalman:", sample, fpga.push_kalman_sample(sample), fpga.kalman_residual)
+    print(
+        "kalman:",
+        sample,
+        fpga.push_kalman_sample(sample),
+        fpga.kalman_residual,
+        fpga.kalman_covariance,
+    )
 
 fpga.use_cpu_rgb = True
 print("pulse counts:", fpga.pulse_counts)
