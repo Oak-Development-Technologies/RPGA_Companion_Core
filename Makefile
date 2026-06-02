@@ -3,7 +3,7 @@ TOP := rpga_companion_core
 DEVICE ?= u4k
 PACKAGE ?= sg48
 PCF := common/io.pcf
-RTL := rtl/ram.v rtl/rpga_companion_core.v
+RTL := rtl/ram.v rtl/tiny_cpu.v rtl/rpga_companion_core.v
 BUILD := build
 
 .PHONY: all clean prog timing
