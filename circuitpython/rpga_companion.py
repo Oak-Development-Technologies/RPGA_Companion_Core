@@ -292,7 +292,7 @@ class RPGACompanion:
             return 1
         shift = 1
         value = 0.5
-        while shift < 15 and gain < value:
+        while shift < 7 and gain < value:
             shift += 1
             value /= 2
         return shift

@@ -60,7 +60,7 @@ Commands:
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x000A0000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x000B0000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` direct RGB, bit 8 legacy `data_out`, bit 9 CPU RGB |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -88,12 +88,12 @@ Commands:
 | `0x33` | `PULSE_P20_PERIOD` | RO | Counter ticks between the last two `P20` edges |
 | `0x34` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters |
 | `0x40` | `KALMAN_CONTROL` | RW | Bit 0 enable, bit 1 reset state |
-| `0x41` | `KALMAN_GAIN` | RW | Shift gain; correction is `residual >> shift` |
+| `0x41` | `KALMAN_GAIN` | RW | Shift gain `0`-`7`; correction is `residual >> shift` |
 | `0x42` | `KALMAN_PROCESS_NOISE` | Stub, reads `0` |
-| `0x43` | `KALMAN_ESTIMATE` | RW | Signed Q16.16 estimate |
+| `0x43` | `KALMAN_ESTIMATE` | RW | Signed Q16.16 estimate, stored internally as Q8.8 |
 | `0x44` | `KALMAN_COVARIANCE` | Stub, reads `0` |
 | `0x45` | `KALMAN_SAMPLE` | WO | Signed Q16.16 sample; writing updates the filter |
-| `0x46` | `KALMAN_RESIDUAL` | RO | Signed Q16.16 previous residual |
+| `0x46` | `KALMAN_RESIDUAL` | RO | Signed Q16.16 previous residual, stored internally as Q8.8 |
 | `0x47` | `KALMAN_COUNT` | RO | Number of accepted samples |
 
 Program/data RAM reads are synchronous. After changing `IMEM_ADDR` or
@@ -153,7 +153,9 @@ still uses `SPI_SCK` for the serial register interface.
 The Kalman block is separate from the tiny CPU and is controlled directly over
 SPI. To fit the U4K fabric budget, it is now a Kalman-like fixed-gain estimator:
 it keeps estimate, residual, and sample count, but drops covariance tracking.
-Samples and state are signed Q16.16:
+The SPI API uses signed Q16.16, but the internal estimator state is narrowed to
+signed Q8.8 to save logic. This keeps roughly `-128.0` to `+127.996` of useful
+range with 1/256 resolution:
 
 ```text
 residual = sample - estimate
@@ -161,7 +163,8 @@ estimate = estimate + (residual >> shift)
 ```
 
 For example, shift `3` behaves like a fixed gain of `1/8`. The CircuitPython
-driver still accepts `gain=0.125` and converts it to the nearest shift.
+driver still accepts `gain=0.125` and converts it to the nearest supported
+shift, clamped to the hardware range `0`-`7`.
 
 ## Build
 
