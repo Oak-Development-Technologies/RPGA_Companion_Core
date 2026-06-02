@@ -225,11 +225,7 @@ class RPGACompanion:
 
     def configure_kalman(self, *, gain=None, process_noise=None, estimate=None, covariance=None):
         if gain is not None:
-            if gain < 0:
-                gain = 0
-            if gain >= 1:
-                gain = 0.9999847412109375
-            self.write_u32(REG_KALMAN_GAIN, int(gain * _Q16_SCALE) & 0xFFFF)
+            self.write_u32(REG_KALMAN_GAIN, self._gain_to_shift(gain))
         if process_noise is not None:
             self.write_q16(REG_KALMAN_PROCESS_NOISE, process_noise)
         if estimate is not None:
@@ -291,6 +287,19 @@ class RPGACompanion:
         if raw & 0x80000000:
             raw -= 1 << 32
         return raw / _Q16_SCALE
+
+    @staticmethod
+    def _gain_to_shift(gain):
+        if gain >= 1:
+            return 0
+        if gain >= 0.5:
+            return 1
+        shift = 1
+        value = 0.5
+        while shift < 15 and gain < value:
+            shift += 1
+            value /= 2
+        return shift
 
 
 def instr(opcode, rd=0, rs=0, rt=0, imm=0):

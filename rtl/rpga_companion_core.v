@@ -184,16 +184,13 @@ module rpga_spi_registers (
     reg pulse_reset = 1'b0;
 
     reg kalman_enable = 1'b1;
-    reg [15:0] kalman_gain = 16'h2000;
+    reg [3:0] kalman_shift = 4'd3;
     reg signed [31:0] kalman_process_noise = 32'sh00000100;
     reg signed [31:0] kalman_estimate = 32'sh00000000;
     reg signed [31:0] kalman_covariance = 32'sh00010000;
     reg signed [31:0] kalman_residual = 32'sh00000000;
     reg [31:0] kalman_count = 32'h00000000;
-    reg signed [31:0] kalman_sample = 32'sh00000000;
     reg signed [31:0] kalman_predicted_covariance = 32'sh00000000;
-    reg signed [63:0] kalman_estimate_product = 64'sh0000000000000000;
-    reg signed [63:0] kalman_covariance_product = 64'sh0000000000000000;
 
     assign miso = ss ? 1'bz : miso_bit;
     assign irq_out = |(irq_status & irq_enable);
@@ -295,7 +292,7 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741;
-                REG_VERSION: read_register = 32'h00080000;
+                REG_VERSION: read_register = 32'h00090000;
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;
@@ -323,7 +320,7 @@ module rpga_spi_registers (
                 REG_PULSE_P20_PERIOD: read_register = p20_period;
                 REG_PULSE_CONTROL: read_register = 32'h00000000;
                 REG_KALMAN_CONTROL: read_register = {31'd0, kalman_enable};
-                REG_KALMAN_GAIN: read_register = {16'd0, kalman_gain};
+                REG_KALMAN_GAIN: read_register = {28'd0, kalman_shift};
                 REG_KALMAN_PROCESS_NOISE: read_register = kalman_process_noise;
                 REG_KALMAN_ESTIMATE: read_register = kalman_estimate;
                 REG_KALMAN_COVARIANCE: read_register = kalman_covariance;
@@ -348,13 +345,10 @@ module rpga_spi_registers (
         input signed [31:0] sample;
         begin
             if (kalman_enable) begin
-                kalman_sample = sample;
-                kalman_residual <= kalman_sample - kalman_estimate;
-                kalman_estimate_product = (kalman_sample - kalman_estimate) * $signed({16'd0, kalman_gain});
-                kalman_estimate <= kalman_estimate + (kalman_estimate_product >>> 16);
+                kalman_residual <= sample - kalman_estimate;
+                kalman_estimate <= kalman_estimate + ((sample - kalman_estimate) >>> kalman_shift);
                 kalman_predicted_covariance = kalman_covariance + kalman_process_noise;
-                kalman_covariance_product = kalman_predicted_covariance * $signed({16'd0, kalman_gain});
-                kalman_covariance <= kalman_predicted_covariance - (kalman_covariance_product >>> 16);
+                kalman_covariance <= kalman_predicted_covariance - (kalman_predicted_covariance >>> kalman_shift);
                 kalman_count <= kalman_count + 32'd1;
             end
         end
@@ -409,7 +403,7 @@ module rpga_spi_registers (
                                 reset_kalman;
                             end
                         end
-                        REG_KALMAN_GAIN: kalman_gain <= write_value[15:0];
+                        REG_KALMAN_GAIN: kalman_shift <= write_value[3:0];
                         REG_KALMAN_PROCESS_NOISE: kalman_process_noise <= write_value;
                         REG_KALMAN_ESTIMATE: kalman_estimate <= write_value;
                         REG_KALMAN_COVARIANCE: kalman_covariance <= write_value;

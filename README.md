@@ -60,7 +60,7 @@ Commands:
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x00080000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x00090000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` direct RGB, bit 8 legacy `data_out`, bit 9 CPU RGB |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -88,7 +88,7 @@ Commands:
 | `0x33` | `PULSE_P20_PERIOD` | RO | Counter ticks between the last two `P20` edges |
 | `0x34` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters |
 | `0x40` | `KALMAN_CONTROL` | RW | Bit 0 enable, bit 1 reset state |
-| `0x41` | `KALMAN_GAIN` | RW | Unsigned Q0.16 fixed gain |
+| `0x41` | `KALMAN_GAIN` | RW | Shift gain; correction is `residual >> shift` |
 | `0x42` | `KALMAN_PROCESS_NOISE` | RW | Signed Q16.16 covariance increment |
 | `0x43` | `KALMAN_ESTIMATE` | RW | Signed Q16.16 estimate |
 | `0x44` | `KALMAN_COVARIANCE` | RW | Signed Q16.16 covariance |
@@ -151,18 +151,18 @@ still uses `SPI_SCK` for the serial register interface.
 ## Kalman Accelerator
 
 The Kalman block is separate from the tiny CPU and is controlled directly over
-SPI. It uses signed Q16.16 samples/state and an unsigned Q0.16 fixed gain:
+SPI. To fit the U4K fabric budget, it uses a shift-based fixed gain rather than
+a multiplier-based Q0.16 gain. Samples and state are signed Q16.16:
 
 ```text
 residual = sample - estimate
-estimate = estimate + gain * residual
+estimate = estimate + (residual >> shift)
 covariance = (covariance + process_noise) -
-             gain * (covariance + process_noise)
+             ((covariance + process_noise) >> shift)
 ```
 
-The multiply operations are ordinary Verilog `*` operations so the
-`synth_ice40 -dsp` pass can attempt to map them into hard multiplier resources
-when available on the selected target.
+For example, shift `3` behaves like a fixed gain of `1/8`. The CircuitPython
+driver still accepts `gain=0.125` and converts it to the nearest shift.
 
 ## Build
 
