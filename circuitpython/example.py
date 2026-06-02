@@ -5,7 +5,6 @@ import time
 
 from rpga_companion import (
     ALGO_EMA,
-    ALGO_KALMAN,
     ALGO_STATS,
     ALGO_THRESHOLD,
     IRQ_SAMPLE_PROCESSED,
@@ -24,12 +23,11 @@ print("version:", hex(fpga.version))
 fpga.scratch = 0x12345678
 print("scratch:", hex(fpga.scratch))
 
-fpga.algorithm_mask = ALGO_KALMAN | ALGO_EMA | ALGO_THRESHOLD | ALGO_STATS
+fpga.algorithm_mask = ALGO_EMA | ALGO_THRESHOLD | ALGO_STATS
 fpga.irq_enable = IRQ_THRESHOLD | IRQ_SAMPLE_PROCESSED
-fpga.configure_kalman(gain=0.125, process_noise=0.01, estimate=0.0, covariance=1.0)
 fpga.configure_ema(alpha=0.25, value=0.0)
 fpga.configure_thresholds(low=9.8, high=10.8)
-fpga.reset_kalman()
+fpga.reset_processing()
 
 for sample in (10.0, 10.5, 9.75, 11.0, 10.25):
     fpga.fifo_write(sample)
@@ -37,8 +35,6 @@ for sample in (10.0, 10.5, 9.75, 11.0, 10.25):
     print(
         "sample:",
         sample,
-        "kalman:",
-        fpga.kalman_estimate,
         "ema:",
         fpga.ema_value,
         "threshold:",
@@ -54,12 +50,7 @@ print("pulse periods:", fpga.pulse_periods)
 
 fpga.set_rgb_pwm(period=256, red=32, green=128, blue=255)
 print("pwm counter:", fpga.pwm_counter)
-
-fpga.crc_reset(seed=0)
-print("crc:", hex(fpga.crc_update_u32(0x12345678)))
-print("crc bytes:", hex(fpga.crc_update_bytes(b"RPGA")))
-print("mailbox status:", fpga.mailbox_status_summary())
-print("mailbox add/xor:", fpga.mailbox_add_xor(0x1234, 0x00FF))
+fpga.disable_rgb_pwm()
 
 while True:
     for color in range(8):

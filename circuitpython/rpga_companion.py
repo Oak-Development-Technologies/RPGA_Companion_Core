@@ -25,17 +25,10 @@ REG_FIFO_CONTROL = const(0x0C)
 REG_ALGO_CONTROL = const(0x10)
 REG_ALGO_STATUS = const(0x11)
 REG_ALGO_ENABLE = const(0x12)
-REG_KALMAN_GAIN = const(0x13)
-REG_KALMAN_PROCESS_NOISE = const(0x14)
-REG_KALMAN_ESTIMATE = const(0x15)
-REG_KALMAN_COVARIANCE = const(0x16)
-REG_KALMAN_SAMPLE = const(0x17)
-REG_KALMAN_RESIDUAL = const(0x18)
-REG_KALMAN_COUNT = const(0x19)
 REG_EMA_ALPHA = const(0x20)
 REG_EMA_VALUE = const(0x21)
-REG_EMA_SAMPLE = const(0x22)
-REG_EMA_COUNT = const(0x23)
+REG_SAMPLE = const(0x22)
+REG_SAMPLE_COUNT = const(0x23)
 REG_THRESH_LOW = const(0x30)
 REG_THRESH_HIGH = const(0x31)
 REG_THRESH_FLAGS = const(0x32)
@@ -62,29 +55,16 @@ REG_PWM_DUTY_R = const(0x62)
 REG_PWM_DUTY_G = const(0x63)
 REG_PWM_DUTY_B = const(0x64)
 REG_PWM_COUNTER = const(0x65)
-REG_CRC_CONTROL = const(0x70)
-REG_CRC_VALUE = const(0x71)
-REG_CRC_DATA = const(0x72)
-REG_CRC_SEED = const(0x73)
-REG_MAILBOX_CONTROL = const(0x80)
-REG_MAILBOX_STATUS = const(0x81)
-REG_MAILBOX_COMMAND = const(0x82)
-REG_MAILBOX_ARG0 = const(0x83)
-REG_MAILBOX_ARG1 = const(0x84)
-REG_MAILBOX_RESULT0 = const(0x85)
-REG_MAILBOX_RESULT1 = const(0x86)
 
 _Q16_SCALE = const(65536)
 IRQ_FIFO_NOT_EMPTY = const(0x01)
 IRQ_FIFO_OVERFLOW = const(0x02)
 IRQ_THRESHOLD = const(0x04)
-IRQ_MAILBOX_DONE = const(0x08)
-IRQ_SAMPLE_PROCESSED = const(0x10)
+IRQ_SAMPLE_PROCESSED = const(0x08)
 
-ALGO_KALMAN = const(0x01)
-ALGO_EMA = const(0x02)
-ALGO_THRESHOLD = const(0x04)
-ALGO_STATS = const(0x08)
+ALGO_EMA = const(0x01)
+ALGO_THRESHOLD = const(0x02)
+ALGO_STATS = const(0x04)
 
 
 class RPGACompanion:
@@ -221,15 +201,11 @@ class RPGACompanion:
     def algorithm_mask(self, mask):
         self.write_u32(REG_ALGO_ENABLE, mask)
 
-    def reset_kalman(self):
+    def reset_processing(self):
         """Reset FPGA-side processing state."""
         control = self.read_u32(REG_ALGO_CONTROL)
         self.write_u32(REG_ALGO_CONTROL, control | 0x02)
         self.write_u32(REG_ALGO_CONTROL, control & ~0x02)
-
-    def reset_processing(self):
-        """Reset all FPGA-side algorithm accumulators."""
-        self.reset_kalman()
 
     def reset_stats(self):
         """Reset stats along with the processing accumulators."""
@@ -238,49 +214,14 @@ class RPGACompanion:
     def reset_pulse_counters(self):
         self.write_u32(REG_PULSE_CONTROL, 0x01)
 
-    def configure_kalman(
-        self,
-        *,
-        gain=None,
-        process_noise=None,
-        estimate=None,
-        covariance=None
-    ):
-        """Configure the scalar fixed-point Kalman-style estimator.
-
-        Values are represented in hardware as signed Q16.16, except gain which
-        is clamped to the range 0.0 through 0.999984.
-        """
-        if gain is not None:
-            if gain < 0:
-                gain = 0
-            if gain >= 1:
-                gain = 0.9999847412109375
-            self.write_u32(REG_KALMAN_GAIN, int(gain * _Q16_SCALE) & 0xFFFFFFFF)
-        if process_noise is not None:
-            self.write_q16(REG_KALMAN_PROCESS_NOISE, process_noise)
-        if estimate is not None:
-            self.write_q16(REG_KALMAN_ESTIMATE, estimate)
-        if covariance is not None:
-            self.write_q16(REG_KALMAN_COVARIANCE, covariance)
-
-    def push_kalman_sample(self, sample):
-        """Push one sample into the FPGA filter and return the new estimate."""
-        self.write_q16(REG_KALMAN_SAMPLE, sample)
-        return self.kalman_estimate
-
     def configure_ema(self, *, alpha=None, value=None):
         if alpha is not None:
-            if alpha < 0:
-                alpha = 0
-            if alpha >= 1:
-                alpha = 0.9999847412109375
-            self.write_u32(REG_EMA_ALPHA, int(alpha * _Q16_SCALE) & 0xFFFFFFFF)
+            self.write_u32(REG_EMA_ALPHA, self._alpha_to_shift(alpha))
         if value is not None:
             self.write_q16(REG_EMA_VALUE, value)
 
-    def push_ema_sample(self, sample):
-        self.write_q16(REG_EMA_SAMPLE, sample)
+    def push_sample(self, sample):
+        self.write_q16(REG_SAMPLE, sample)
         return self.ema_value
 
     def configure_thresholds(self, low, high):
@@ -300,79 +241,13 @@ class RPGACompanion:
     def disable_rgb_pwm(self):
         self.write_u32(REG_PWM_CONTROL, 0)
 
-    def crc_reset(self, seed=None):
-        if seed is not None:
-            self.write_u32(REG_CRC_SEED, seed)
-        self.write_u32(REG_CRC_CONTROL, 0x01)
-
-    def crc_update_u32(self, value):
-        self.write_u32(REG_CRC_DATA, value)
-        return self.read_u32(REG_CRC_VALUE)
-
-    def crc_update_bytes(self, data):
-        word = 0
-        count = 0
-        for byte in data:
-            word |= (byte & 0xFF) << (8 * count)
-            count += 1
-            if count == 4:
-                self.write_u32(REG_CRC_DATA, word)
-                word = 0
-                count = 0
-        if count:
-            self.write_u32(REG_CRC_DATA, word)
-        return self.read_u32(REG_CRC_VALUE)
-
-    def mailbox_run(self, command, arg0=0, arg1=0):
-        self.write_u32(REG_MAILBOX_COMMAND, command)
-        self.write_u32(REG_MAILBOX_ARG0, arg0)
-        self.write_u32(REG_MAILBOX_ARG1, arg1)
-        self.write_u32(REG_MAILBOX_CONTROL, 0x01)
-        return (self.read_u32(REG_MAILBOX_RESULT0), self.read_u32(REG_MAILBOX_RESULT1))
-
-    def mailbox_process_sample(self, sample):
-        result = self.mailbox_run(0x01, self._to_q16(sample), 0)
-        return (self._from_q16(result[0]), result[1])
-
-    def mailbox_status_summary(self):
-        return self.mailbox_run(0x02)
-
-    def mailbox_crc_preview(self, value):
-        return self.mailbox_run(0x03, value, 0)[0]
-
-    def mailbox_add_xor(self, arg0, arg1):
-        return self.mailbox_run(0x04, arg0, arg1)
-
-    def mailbox_pulse_summary(self):
-        return self.mailbox_run(0x05)
-
-    @property
-    def kalman_gain(self):
-        return self.read_u32(REG_KALMAN_GAIN) / _Q16_SCALE
-
-    @property
-    def kalman_estimate(self):
-        return self.read_q16(REG_KALMAN_ESTIMATE)
-
-    @property
-    def kalman_covariance(self):
-        return self.read_q16(REG_KALMAN_COVARIANCE)
-
-    @property
-    def kalman_residual(self):
-        return self.read_q16(REG_KALMAN_RESIDUAL)
-
-    @property
-    def kalman_sample_count(self):
-        return self.read_u32(REG_KALMAN_COUNT)
-
     @property
     def ema_value(self):
         return self.read_q16(REG_EMA_VALUE)
 
     @property
-    def ema_sample_count(self):
-        return self.read_u32(REG_EMA_COUNT)
+    def sample_count(self):
+        return self.read_u32(REG_SAMPLE_COUNT)
 
     @property
     def threshold_flags(self):
@@ -419,10 +294,6 @@ class RPGACompanion:
     def pwm_counter(self):
         return self.read_u32(REG_PWM_COUNTER)
 
-    @property
-    def crc_value(self):
-        return self.read_u32(REG_CRC_VALUE)
-
     def _transfer(self, tx, rx=None):
         while not self.spi.try_lock():
             pass
@@ -457,3 +328,16 @@ class RPGACompanion:
         if raw & 0x80000000:
             raw -= 1 << 32
         return raw / _Q16_SCALE
+
+    @staticmethod
+    def _alpha_to_shift(alpha):
+        if alpha >= 1:
+            return 0
+        if alpha >= 0.5:
+            return 1
+        shift = 1
+        value = 0.5
+        while shift < 15 and alpha < value:
+            shift += 1
+            value /= 2
+        return shift

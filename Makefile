@@ -14,7 +14,7 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/$(PROJECT).json: $(RTL) | $(BUILD)
-	yosys -p "synth_ice40 -top $(TOP) -json $@" $(RTL)
+	yosys -p "synth_ice40 -dsp -top $(TOP) -json $@" $(RTL)
 
 $(BUILD)/$(PROJECT).asc: $(BUILD)/$(PROJECT).json $(PCF)
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD)/$(PROJECT).json --pcf $(PCF) --asc $@
