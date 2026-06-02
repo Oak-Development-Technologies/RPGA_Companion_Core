@@ -184,15 +184,20 @@ module rpga_spi_registers (
     reg pulse_reset = 1'b0;
 
     reg kalman_enable = 1'b1;
-    reg [2:0] kalman_shift = 3'd3;
+    reg [15:0] kalman_gain = 16'h2000;
     reg signed [15:0] kalman_estimate = 16'sh0000;
     reg signed [15:0] kalman_residual = 16'sh0000;
     reg [15:0] kalman_count = 16'h0000;
-    reg signed [15:0] kalman_sample = 16'sh0000;
-    reg signed [15:0] kalman_delta = 16'sh0000;
+    wire signed [15:0] kalman_next_sample;
+    wire signed [15:0] kalman_next_delta;
+    wire signed [31:0] kalman_gain_product;
+    wire signed [15:0] kalman_correction;
 
     assign miso = ss ? 1'bz : miso_bit;
     assign irq_out = |(irq_status & irq_enable);
+    assign kalman_next_sample = q16_to_q8(spi_write_value);
+    assign kalman_next_delta = kalman_next_sample - kalman_estimate;
+    assign kalman_correction = kalman_gain_product[31:16];
 
     wire [7:0] imem_raddr = cpu_running ? cpu_imem_addr : imem_addr_spi;
     wire [7:0] dmem_raddr = cpu_running ? cpu_dmem_addr : dmem_addr_spi;
@@ -245,6 +250,13 @@ module rpga_spi_registers (
         .r3(cpu_r3)
     );
 
+    rpga_ice40_dsp_mul16_signed_unsigned kalman_mul (
+        .clk(sck),
+        .a(kalman_next_delta),
+        .b(kalman_gain),
+        .y(kalman_gain_product)
+    );
+
     always @(posedge clk) begin
         p13_d <= p13;
         p20_d <= p20;
@@ -291,7 +303,7 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741;
-                REG_VERSION: read_register = 32'h000B0000;
+                REG_VERSION: read_register = 32'h000C0000;
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;
@@ -319,7 +331,7 @@ module rpga_spi_registers (
                 REG_PULSE_P20_PERIOD: read_register = p20_period;
                 REG_PULSE_CONTROL: read_register = 32'h00000000;
                 REG_KALMAN_CONTROL: read_register = {31'd0, kalman_enable};
-                REG_KALMAN_GAIN: read_register = {29'd0, kalman_shift};
+                REG_KALMAN_GAIN: read_register = {16'd0, kalman_gain};
                 REG_KALMAN_PROCESS_NOISE: read_register = 32'h00000000;
                 REG_KALMAN_ESTIMATE: read_register = q8_to_q16(kalman_estimate);
                 REG_KALMAN_COVARIANCE: read_register = 32'h00000000;
@@ -345,41 +357,11 @@ module rpga_spi_registers (
         end
     endfunction
 
-    function signed [15:0] kalman_shift_right;
-        input signed [15:0] value;
-        input [2:0] shift;
-        begin
-            case (shift)
-                3'd0: kalman_shift_right = value;
-                3'd1: kalman_shift_right = value >>> 1;
-                3'd2: kalman_shift_right = value >>> 2;
-                3'd3: kalman_shift_right = value >>> 3;
-                3'd4: kalman_shift_right = value >>> 4;
-                3'd5: kalman_shift_right = value >>> 5;
-                3'd6: kalman_shift_right = value >>> 6;
-                default: kalman_shift_right = value >>> 7;
-            endcase
-        end
-    endfunction
-
     task reset_kalman;
         begin
             kalman_estimate <= 16'sh0000;
             kalman_residual <= 16'sh0000;
             kalman_count <= 16'h0000;
-        end
-    endtask
-
-    task update_kalman;
-        input signed [31:0] sample;
-        begin
-            if (kalman_enable) begin
-                kalman_sample = q16_to_q8(sample);
-                kalman_delta = kalman_sample - kalman_estimate;
-                kalman_residual <= kalman_delta;
-                kalman_estimate <= kalman_estimate + kalman_shift_right(kalman_delta, kalman_shift);
-                kalman_count <= kalman_count + 16'd1;
-            end
         end
     endtask
 
@@ -432,9 +414,15 @@ module rpga_spi_registers (
                                 reset_kalman;
                             end
                         end
-                        REG_KALMAN_GAIN: kalman_shift <= write_value[2:0];
+                        REG_KALMAN_GAIN: kalman_gain <= write_value[15:0];
                         REG_KALMAN_ESTIMATE: kalman_estimate <= q16_to_q8(write_value);
-                        REG_KALMAN_SAMPLE: update_kalman(write_value);
+                        REG_KALMAN_SAMPLE: begin
+                            if (kalman_enable) begin
+                                kalman_residual <= kalman_next_delta;
+                                kalman_estimate <= kalman_estimate + kalman_correction;
+                                kalman_count <= kalman_count + 16'd1;
+                            end
+                        end
                         default: begin
                         end
                     endcase

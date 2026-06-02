@@ -10,14 +10,15 @@ This version is centered around memory instead of fixed-function filters:
 - 256 x 32 data RAM
 - tiny 8-register CPU
 - SPI loader/debug register map
-- SPI-mapped fixed-gain Kalman accelerator
+- SPI-mapped DSP-backed fixed-gain Kalman accelerator
 - CPU IRQ output on `data_out`
 - pulse timing counters for `P13` and `P20`
 
 The goal is to trade scarce logic cells for iCE40 block RAM. The RAMs live in
 [rtl/ram.v](rtl/ram.v) and directly instantiate `SB_RAM40_4K` blocks instead of
 relying on inference. The program RAM uses two blocks and the data RAM uses two
-blocks.
+blocks. The Kalman gain multiply lives in [rtl/dsp_mac16.v](rtl/dsp_mac16.v)
+and directly instantiates one `SB_MAC16` block.
 
 ## Pin Map
 
@@ -60,7 +61,7 @@ Commands:
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x000B0000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x000C0000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` direct RGB, bit 8 legacy `data_out`, bit 9 CPU RGB |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -88,7 +89,7 @@ Commands:
 | `0x33` | `PULSE_P20_PERIOD` | RO | Counter ticks between the last two `P20` edges |
 | `0x34` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters |
 | `0x40` | `KALMAN_CONTROL` | RW | Bit 0 enable, bit 1 reset state |
-| `0x41` | `KALMAN_GAIN` | RW | Shift gain `0`-`7`; correction is `residual >> shift` |
+| `0x41` | `KALMAN_GAIN` | RW | Unsigned Q0.16 gain; correction uses one `SB_MAC16` |
 | `0x42` | `KALMAN_PROCESS_NOISE` | Stub, reads `0` |
 | `0x43` | `KALMAN_ESTIMATE` | RW | Signed Q16.16 estimate, stored internally as Q8.8 |
 | `0x44` | `KALMAN_COVARIANCE` | Stub, reads `0` |
@@ -159,12 +160,13 @@ range with 1/256 resolution:
 
 ```text
 residual = sample - estimate
-estimate = estimate + (residual >> shift)
+correction = (residual * gain_q0_16) >> 16
+estimate = estimate + correction
 ```
 
-For example, shift `3` behaves like a fixed gain of `1/8`. The CircuitPython
-driver still accepts `gain=0.125` and converts it to the nearest supported
-shift, clamped to the hardware range `0`-`7`.
+For example, `gain=0.125` writes `0x2000` to `KALMAN_GAIN`. The correction
+multiply is an explicit signed-residual by unsigned-gain `SB_MAC16` instance,
+which should show up as DSP usage in the oss-cad-suite synthesis report.
 
 ## Build
 
