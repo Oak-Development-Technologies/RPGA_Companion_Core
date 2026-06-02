@@ -19,14 +19,34 @@ module rpga_companion_core (
     wire [31:0] control;
     wire irq_out;
     wire [31:0] cpu_out;
+    wire hfosc_clk;
     wire internal_clk;
+    reg [1:0] clk_div_phase = 2'd0;
+    reg core_clk_div = 1'b0;
 
     reg [31:0] sys_counter = 32'd0;
 
-    SB_HFOSC SB_HFOSC_inst (
+    SB_HFOSC #(
+        .CLKHF_DIV("0b00")
+    ) SB_HFOSC_inst (
         .CLKHFEN(1'b1),
         .CLKHFPU(1'b1),
-        .CLKHF(internal_clk)
+        .CLKHF(hfosc_clk)
+    );
+
+    always @(posedge hfosc_clk) begin
+        if (clk_div_phase == 2'd2) begin
+            clk_div_phase <= 2'd0;
+        end else begin
+            clk_div_phase <= clk_div_phase + 2'd1;
+        end
+
+        core_clk_div <= (clk_div_phase == 2'd0);
+    end
+
+    SB_GB core_clk_buffer (
+        .USER_SIGNAL_TO_GLOBAL_BUFFER(core_clk_div),
+        .GLOBAL_BUFFER_OUTPUT(internal_clk)
     );
 
     always @(posedge internal_clk) begin
@@ -303,7 +323,7 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741;
-                REG_VERSION: read_register = 32'h000C0000;
+                REG_VERSION: read_register = 32'h000D0000;
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;

@@ -61,11 +61,11 @@ Commands:
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x000C0000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x000D0000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` direct RGB, bit 8 legacy `data_out`, bit 9 CPU RGB |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
-| `0x05` | `COUNTER` | RO | Increments on `clk` |
+| `0x05` | `COUNTER` | RO | Increments on the divided internal core clock |
 | `0x06` | `SPI_COUNT` | RO | Counts completed 48-bit SPI transactions |
 | `0x07` | `IRQ_STATUS` | RO | Bit 0 CPU IRQ, bit 1 pulse IRQ |
 | `0x08` | `IRQ_ENABLE` | RW | IRQ enable mask driving `data_out` |
@@ -83,8 +83,8 @@ Commands:
 | `0x21` | `IMEM_DATA` | RW | Program RAM data, auto-increments address on write |
 | `0x22` | `DMEM_ADDR` | RW | SPI data RAM address |
 | `0x23` | `DMEM_DATA` | RW | Data RAM data, auto-increments address on write |
-| `0x30` | `PULSE_P13_COUNT` | RO | Edge count on `P13` sampled by `internal_clk` |
-| `0x31` | `PULSE_P20_COUNT` | RO | Edge count on `P20` sampled by `internal_clk` |
+| `0x30` | `PULSE_P13_COUNT` | RO | Edge count on `P13` sampled by the core clock |
+| `0x31` | `PULSE_P20_COUNT` | RO | Edge count on `P20` sampled by the core clock |
 | `0x32` | `PULSE_P13_PERIOD` | RO | Counter ticks between the last two `P13` edges |
 | `0x33` | `PULSE_P20_PERIOD` | RO | Counter ticks between the last two `P20` edges |
 | `0x34` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters |
@@ -136,18 +136,27 @@ an extra cycle.
 
 ## Clocking
 
-The core now instantiates the iCE40 high-frequency oscillator:
+The core instantiates the iCE40 high-frequency oscillator at 48 MHz, divides it
+by 3 in a tiny clock divider, and routes the divided clock through `SB_GB`:
 
 ```verilog
-SB_HFOSC SB_HFOSC_inst (
+SB_HFOSC #(
+    .CLKHF_DIV("0b00")
+) SB_HFOSC_inst (
     .CLKHFEN(1'b1),
     .CLKHFPU(1'b1),
-    .CLKHF(internal_clk)
+    .CLKHF(hfosc_clk)
+);
+
+SB_GB core_clk_buffer (
+    .USER_SIGNAL_TO_GLOBAL_BUFFER(core_clk_div),
+    .GLOBAL_BUFFER_OUTPUT(internal_clk)
 );
 ```
 
-`internal_clk` drives the CPU, RAM ports, system counter, and pulse timing. SPI
-still uses `SPI_SCK` for the serial register interface.
+`internal_clk` is about 16 MHz and drives the CPU, RAM ports, system counter,
+and pulse timing. SPI still uses `SPI_SCK` for the serial register interface.
+Only the divider itself runs from the raw 48 MHz oscillator.
 
 ## Kalman Accelerator
 
@@ -181,9 +190,11 @@ The Makefile defaults to:
 ```make
 DEVICE ?= u4k
 PACKAGE ?= sg48
+FREQ ?= 16
 ```
 
-The synthesis command includes `synth_ice40 -dsp -abc2`.
+The synthesis command includes `synth_ice40 -dsp -abc2`. The place-and-route
+and timing targets default to 16 MHz.
 
 ## CircuitPython Usage
 
