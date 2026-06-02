@@ -11,7 +11,7 @@ module rpga_sync_ram #(
     input  wire [ADDR_WIDTH-1:0] raddr,
     output reg  [DATA_WIDTH-1:0] rdata
 );
-    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] mem [0:(1 << ADDR_WIDTH)-1];
+    reg [DATA_WIDTH-1:0] mem [0:(1 << ADDR_WIDTH)-1];
 
     always @(posedge clk) begin
         if (we) begin
@@ -37,7 +37,7 @@ module rpga_dual_port_ram #(
     input  wire [DATA_WIDTH-1:0] b_wdata,
     output reg  [DATA_WIDTH-1:0] b_rdata
 );
-    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] mem [0:(1 << ADDR_WIDTH)-1];
+    reg [DATA_WIDTH-1:0] mem [0:(1 << ADDR_WIDTH)-1];
 
     always @(posedge a_clk) begin
         if (a_we) begin
@@ -52,6 +52,55 @@ module rpga_dual_port_ram #(
         end
         b_rdata <= mem[b_addr];
     end
+endmodule
+
+module rpga_ice40_ram32_256 (
+    input  wire        wclk,
+    input  wire        we,
+    input  wire [7:0]  waddr,
+    input  wire [31:0] wdata,
+    input  wire        rclk,
+    input  wire [7:0]  raddr,
+    output wire [31:0] rdata
+);
+    wire [15:0] rdata_lo;
+    wire [15:0] rdata_hi;
+
+    SB_RAM40_4K #(
+        .READ_MODE(0),
+        .WRITE_MODE(0)
+    ) ram_lo (
+        .RDATA(rdata_lo),
+        .RADDR({raddr, 3'b000}),
+        .RCLK(rclk),
+        .RCLKE(1'b1),
+        .RE(1'b1),
+        .WADDR({waddr, 3'b000}),
+        .WCLK(wclk),
+        .WCLKE(1'b1),
+        .WDATA(wdata[15:0]),
+        .WE(we),
+        .MASK(16'h0000)
+    );
+
+    SB_RAM40_4K #(
+        .READ_MODE(0),
+        .WRITE_MODE(0)
+    ) ram_hi (
+        .RDATA(rdata_hi),
+        .RADDR({raddr, 3'b000}),
+        .RCLK(rclk),
+        .RCLKE(1'b1),
+        .RE(1'b1),
+        .WADDR({waddr, 3'b000}),
+        .WCLK(wclk),
+        .WCLKE(1'b1),
+        .WDATA(wdata[31:16]),
+        .WE(we),
+        .MASK(16'h0000)
+    );
+
+    assign rdata = {rdata_hi, rdata_lo};
 endmodule
 
 `default_nettype wire

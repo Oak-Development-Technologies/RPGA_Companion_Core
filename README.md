@@ -10,13 +10,14 @@ This version is centered around memory instead of fixed-function filters:
 - 256 x 32 data RAM
 - tiny 8-register CPU
 - SPI loader/debug register map
+- SPI-mapped fixed-gain Kalman accelerator
 - CPU IRQ output on `data_out`
 - pulse timing counters for `P13` and `P20`
 
 The goal is to trade scarce logic cells for iCE40 block RAM. The RAMs live in
-[rtl/ram.v](rtl/ram.v) and are written as synchronous dual-port memories with a
-block-RAM inference attribute, so synthesis should infer `ICESTORM_RAM` /
-`SB_RAM40_4K` blocks instead of distributed LUT memory.
+[rtl/ram.v](rtl/ram.v) and directly instantiate `SB_RAM40_4K` blocks instead of
+relying on inference. The program RAM uses two blocks and the data RAM uses two
+blocks.
 
 ## Pin Map
 
@@ -26,7 +27,7 @@ block-RAM inference attribute, so synthesis should infer `ICESTORM_RAM` /
 | `SPI_SCK` | 15 | input | SPI clock |
 | `SPI_MOSI` | 17 | input | SPI data from RP2040 |
 | `SPI_MISO` | 14 | output | SPI data to RP2040 |
-| `clk` | 2 | input | CPU, counters, and pulse timing clock |
+| `clk` | 2 | input | External sideband clock, currently unused by the internal CPU clock |
 | `enable` | 3 | input | Legacy sideband input |
 | `data` | 4 | input | Legacy sideband input |
 | `data_out` | 6 | output | IRQ output by default |
@@ -59,7 +60,7 @@ Commands:
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x00070000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x00080000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` direct RGB, bit 8 legacy `data_out`, bit 9 CPU RGB |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -81,11 +82,19 @@ Commands:
 | `0x21` | `IMEM_DATA` | RW | Program RAM data, auto-increments address on write |
 | `0x22` | `DMEM_ADDR` | RW | SPI data RAM address |
 | `0x23` | `DMEM_DATA` | RW | Data RAM data, auto-increments address on write |
-| `0x30` | `PULSE_P13_COUNT` | RO | Edge count on `P13` sampled by `clk` |
-| `0x31` | `PULSE_P20_COUNT` | RO | Edge count on `P20` sampled by `clk` |
+| `0x30` | `PULSE_P13_COUNT` | RO | Edge count on `P13` sampled by `internal_clk` |
+| `0x31` | `PULSE_P20_COUNT` | RO | Edge count on `P20` sampled by `internal_clk` |
 | `0x32` | `PULSE_P13_PERIOD` | RO | Counter ticks between the last two `P13` edges |
 | `0x33` | `PULSE_P20_PERIOD` | RO | Counter ticks between the last two `P20` edges |
 | `0x34` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters |
+| `0x40` | `KALMAN_CONTROL` | RW | Bit 0 enable, bit 1 reset state |
+| `0x41` | `KALMAN_GAIN` | RW | Unsigned Q0.16 fixed gain |
+| `0x42` | `KALMAN_PROCESS_NOISE` | RW | Signed Q16.16 covariance increment |
+| `0x43` | `KALMAN_ESTIMATE` | RW | Signed Q16.16 estimate |
+| `0x44` | `KALMAN_COVARIANCE` | RW | Signed Q16.16 covariance |
+| `0x45` | `KALMAN_SAMPLE` | WO | Signed Q16.16 sample; writing updates the filter |
+| `0x46` | `KALMAN_RESIDUAL` | RO | Signed Q16.16 previous residual |
+| `0x47` | `KALMAN_COUNT` | RO | Number of accepted samples |
 
 Program/data RAM reads are synchronous. After changing `IMEM_ADDR` or
 `DMEM_ADDR`, perform a data read to receive the selected word.
@@ -123,6 +132,37 @@ Instructions are 32-bit words:
 
 The CPU uses a small fetch/read/execute pipeline over synchronous RAM. Loads take
 an extra cycle.
+
+## Clocking
+
+The core now instantiates the iCE40 high-frequency oscillator:
+
+```verilog
+SB_HFOSC SB_HFOSC_inst (
+    .CLKHFEN(1'b1),
+    .CLKHFPU(1'b1),
+    .CLKHF(internal_clk)
+);
+```
+
+`internal_clk` drives the CPU, RAM ports, system counter, and pulse timing. SPI
+still uses `SPI_SCK` for the serial register interface.
+
+## Kalman Accelerator
+
+The Kalman block is separate from the tiny CPU and is controlled directly over
+SPI. It uses signed Q16.16 samples/state and an unsigned Q0.16 fixed gain:
+
+```text
+residual = sample - estimate
+estimate = estimate + gain * residual
+covariance = (covariance + process_noise) -
+             gain * (covariance + process_noise)
+```
+
+The multiply operations are ordinary Verilog `*` operations so the
+`synth_ice40 -dsp` pass can attempt to map them into hard multiplier resources
+when available on the selected target.
 
 ## Build
 
@@ -171,6 +211,9 @@ while fpga.cpu_status["running"]:
 
 print(fpga.cpu_out)
 print(fpga.read_data_word(2))
+
+fpga.configure_kalman(gain=0.125, process_noise=0.01, estimate=0.0, covariance=1.0)
+print(fpga.push_kalman_sample(10.0))
 ```
 
 There is also a runnable example at

@@ -19,10 +19,17 @@ module rpga_companion_core (
     wire [31:0] control;
     wire irq_out;
     wire [31:0] cpu_out;
+    wire internal_clk;
 
     reg [31:0] sys_counter = 32'd0;
 
-    always @(posedge clk) begin
+    SB_HFOSC SB_HFOSC_inst (
+        .CLKHFEN(1'b1),
+        .CLKHFPU(1'b1),
+        .CLKHF(internal_clk)
+    );
+
+    always @(posedge internal_clk) begin
         sys_counter <= sys_counter + 32'd1;
     end
 
@@ -30,7 +37,7 @@ module rpga_companion_core (
     assign data_out = control[8] ? (scratch[0] ^ enable ^ data) : irq_out;
 
     rpga_spi_registers registers (
-        .clk(clk),
+        .clk(internal_clk),
         .ss(SPI_SS),
         .sck(SPI_SCK),
         .mosi(SPI_MOSI),
@@ -97,6 +104,15 @@ module rpga_spi_registers (
     localparam [7:0] REG_PULSE_P20_PERIOD = 8'h33;
     localparam [7:0] REG_PULSE_CONTROL = 8'h34;
 
+    localparam [7:0] REG_KALMAN_CONTROL = 8'h40;
+    localparam [7:0] REG_KALMAN_GAIN = 8'h41;
+    localparam [7:0] REG_KALMAN_PROCESS_NOISE = 8'h42;
+    localparam [7:0] REG_KALMAN_ESTIMATE = 8'h43;
+    localparam [7:0] REG_KALMAN_COVARIANCE = 8'h44;
+    localparam [7:0] REG_KALMAN_SAMPLE = 8'h45;
+    localparam [7:0] REG_KALMAN_RESIDUAL = 8'h46;
+    localparam [7:0] REG_KALMAN_COUNT = 8'h47;
+
     localparam IRQ_CPU = 0;
     localparam IRQ_PULSE = 1;
 
@@ -120,8 +136,20 @@ module rpga_spi_registers (
     wire [31:0] imem_rdata_spi;
     wire [31:0] dmem_rdata_spi;
     wire [31:0] spi_write_value = {write_shift[30:0], mosi};
-    wire imem_we_spi = !ss && (bit_count == 6'd47) && (command == CMD_WRITE) && (address == REG_IMEM_DATA);
-    wire dmem_we_spi = !ss && (bit_count == 6'd47) && (command == CMD_WRITE) && (address == REG_DMEM_DATA);
+    reg imem_req_sck = 1'b0;
+    reg dmem_req_sck = 1'b0;
+    reg [7:0] imem_waddr_sck = 8'h00;
+    reg [7:0] dmem_waddr_sck = 8'h00;
+    reg [31:0] imem_wdata_sck = 32'h00000000;
+    reg [31:0] dmem_wdata_sck = 32'h00000000;
+    reg [2:0] imem_req_sync = 3'b000;
+    reg [2:0] dmem_req_sync = 3'b000;
+    reg [7:0] imem_waddr_clk = 8'h00;
+    reg [7:0] dmem_waddr_clk = 8'h00;
+    reg [31:0] imem_wdata_clk = 32'h00000000;
+    reg [31:0] dmem_wdata_clk = 32'h00000000;
+    wire imem_we_clk = imem_req_sync[2] ^ imem_req_sync[1];
+    wire dmem_spi_we_clk = dmem_req_sync[2] ^ dmem_req_sync[1];
 
     reg [2:0] cpu_control = 3'b000;
     reg [7:0] cpu_start_pc = 8'h00;
@@ -141,6 +169,9 @@ module rpga_spi_registers (
     wire cpu_dmem_we;
     wire [31:0] cpu_dmem_wdata;
     wire [31:0] cpu_dmem_rdata;
+    wire dmem_we_clk = cpu_dmem_we | dmem_spi_we_clk;
+    wire [7:0] dmem_waddr_clk_mux = cpu_dmem_we ? cpu_dmem_addr : dmem_waddr_clk;
+    wire [31:0] dmem_wdata_clk_mux = cpu_dmem_we ? cpu_dmem_wdata : dmem_wdata_clk;
 
     reg p13_d = 1'b0;
     reg p20_d = 1'b0;
@@ -152,39 +183,45 @@ module rpga_spi_registers (
     reg [31:0] p20_period = 32'h00000000;
     reg pulse_reset = 1'b0;
 
+    reg kalman_enable = 1'b1;
+    reg [15:0] kalman_gain = 16'h2000;
+    reg signed [31:0] kalman_process_noise = 32'sh00000100;
+    reg signed [31:0] kalman_estimate = 32'sh00000000;
+    reg signed [31:0] kalman_covariance = 32'sh00010000;
+    reg signed [31:0] kalman_residual = 32'sh00000000;
+    reg [31:0] kalman_count = 32'h00000000;
+    reg signed [31:0] kalman_sample = 32'sh00000000;
+    reg signed [31:0] kalman_predicted_covariance = 32'sh00000000;
+    reg signed [63:0] kalman_estimate_product = 64'sh0000000000000000;
+    reg signed [63:0] kalman_covariance_product = 64'sh0000000000000000;
+
     assign miso = ss ? 1'bz : miso_bit;
     assign irq_out = |(irq_status & irq_enable);
 
-    rpga_dual_port_ram #(
-        .ADDR_WIDTH(8),
-        .DATA_WIDTH(32)
-    ) program_ram (
-        .a_clk(sck),
-        .a_we(imem_we_spi),
-        .a_addr(imem_addr_spi),
-        .a_wdata(spi_write_value),
-        .a_rdata(imem_rdata_spi),
-        .b_clk(clk),
-        .b_we(1'b0),
-        .b_addr(cpu_imem_addr),
-        .b_wdata(32'h00000000),
-        .b_rdata(cpu_imem_rdata)
+    wire [7:0] imem_raddr = cpu_running ? cpu_imem_addr : imem_addr_spi;
+    wire [7:0] dmem_raddr = cpu_running ? cpu_dmem_addr : dmem_addr_spi;
+
+    assign imem_rdata_spi = cpu_running ? 32'h00000000 : cpu_imem_rdata;
+    assign dmem_rdata_spi = cpu_running ? 32'h00000000 : cpu_dmem_rdata;
+
+    rpga_ice40_ram32_256 program_ram (
+        .wclk(clk),
+        .we(imem_we_clk),
+        .waddr(imem_waddr_clk),
+        .wdata(imem_wdata_clk),
+        .rclk(clk),
+        .raddr(imem_raddr),
+        .rdata(cpu_imem_rdata)
     );
 
-    rpga_dual_port_ram #(
-        .ADDR_WIDTH(8),
-        .DATA_WIDTH(32)
-    ) data_ram (
-        .a_clk(sck),
-        .a_we(dmem_we_spi),
-        .a_addr(dmem_addr_spi),
-        .a_wdata(spi_write_value),
-        .a_rdata(dmem_rdata_spi),
-        .b_clk(clk),
-        .b_we(cpu_dmem_we),
-        .b_addr(cpu_dmem_addr),
-        .b_wdata(cpu_dmem_wdata),
-        .b_rdata(cpu_dmem_rdata)
+    rpga_ice40_ram32_256 data_ram (
+        .wclk(clk),
+        .we(dmem_we_clk),
+        .waddr(dmem_waddr_clk_mux),
+        .wdata(dmem_wdata_clk_mux),
+        .rclk(clk),
+        .raddr(dmem_raddr),
+        .rdata(cpu_dmem_rdata)
     );
 
     rpga_tiny_cpu cpu (
@@ -215,6 +252,12 @@ module rpga_spi_registers (
     always @(posedge clk) begin
         p13_d <= p13;
         p20_d <= p20;
+        imem_req_sync <= {imem_req_sync[1:0], imem_req_sck};
+        dmem_req_sync <= {dmem_req_sync[1:0], dmem_req_sck};
+        imem_waddr_clk <= imem_waddr_sck;
+        dmem_waddr_clk <= dmem_waddr_sck;
+        imem_wdata_clk <= imem_wdata_sck;
+        dmem_wdata_clk <= dmem_wdata_sck;
 
         if (cpu_control[2]) begin
             cpu_irq_latched <= 1'b0;
@@ -252,7 +295,7 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741;
-                REG_VERSION: read_register = 32'h00070000;
+                REG_VERSION: read_register = 32'h00080000;
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;
@@ -279,10 +322,43 @@ module rpga_spi_registers (
                 REG_PULSE_P13_PERIOD: read_register = p13_period;
                 REG_PULSE_P20_PERIOD: read_register = p20_period;
                 REG_PULSE_CONTROL: read_register = 32'h00000000;
+                REG_KALMAN_CONTROL: read_register = {31'd0, kalman_enable};
+                REG_KALMAN_GAIN: read_register = {16'd0, kalman_gain};
+                REG_KALMAN_PROCESS_NOISE: read_register = kalman_process_noise;
+                REG_KALMAN_ESTIMATE: read_register = kalman_estimate;
+                REG_KALMAN_COVARIANCE: read_register = kalman_covariance;
+                REG_KALMAN_SAMPLE: read_register = 32'h00000000;
+                REG_KALMAN_RESIDUAL: read_register = kalman_residual;
+                REG_KALMAN_COUNT: read_register = kalman_count;
                 default: read_register = 32'h00000000;
             endcase
         end
     endfunction
+
+    task reset_kalman;
+        begin
+            kalman_estimate <= 32'sh00000000;
+            kalman_covariance <= 32'sh00010000;
+            kalman_residual <= 32'sh00000000;
+            kalman_count <= 32'h00000000;
+        end
+    endtask
+
+    task update_kalman;
+        input signed [31:0] sample;
+        begin
+            if (kalman_enable) begin
+                kalman_sample = sample;
+                kalman_residual <= kalman_sample - kalman_estimate;
+                kalman_estimate_product = (kalman_sample - kalman_estimate) * $signed({16'd0, kalman_gain});
+                kalman_estimate <= kalman_estimate + (kalman_estimate_product >>> 16);
+                kalman_predicted_covariance = kalman_covariance + kalman_process_noise;
+                kalman_covariance_product = kalman_predicted_covariance * $signed({16'd0, kalman_gain});
+                kalman_covariance <= kalman_predicted_covariance - (kalman_covariance_product >>> 16);
+                kalman_count <= kalman_count + 32'd1;
+            end
+        end
+    endtask
 
     always @(posedge sck or posedge ss) begin
         if (ss) begin
@@ -309,14 +385,35 @@ module rpga_spi_registers (
                         REG_CPU_CONTROL: cpu_control <= write_value[2:0];
                         REG_CPU_START_PC: cpu_start_pc <= write_value[7:0];
                         REG_IMEM_ADDR: imem_addr_spi <= write_value[7:0];
-                        REG_IMEM_DATA: imem_addr_spi <= imem_addr_spi + 8'd1;
+                        REG_IMEM_DATA: begin
+                            imem_waddr_sck <= imem_addr_spi;
+                            imem_wdata_sck <= write_value;
+                            imem_req_sck <= !imem_req_sck;
+                            imem_addr_spi <= imem_addr_spi + 8'd1;
+                        end
                         REG_DMEM_ADDR: dmem_addr_spi <= write_value[7:0];
-                        REG_DMEM_DATA: dmem_addr_spi <= dmem_addr_spi + 8'd1;
+                        REG_DMEM_DATA: begin
+                            dmem_waddr_sck <= dmem_addr_spi;
+                            dmem_wdata_sck <= write_value;
+                            dmem_req_sck <= !dmem_req_sck;
+                            dmem_addr_spi <= dmem_addr_spi + 8'd1;
+                        end
                         REG_PULSE_CONTROL: begin
                             if (write_value[0]) begin
                                 pulse_reset <= 1'b1;
                             end
                         end
+                        REG_KALMAN_CONTROL: begin
+                            kalman_enable <= write_value[0];
+                            if (write_value[1]) begin
+                                reset_kalman;
+                            end
+                        end
+                        REG_KALMAN_GAIN: kalman_gain <= write_value[15:0];
+                        REG_KALMAN_PROCESS_NOISE: kalman_process_noise <= write_value;
+                        REG_KALMAN_ESTIMATE: kalman_estimate <= write_value;
+                        REG_KALMAN_COVARIANCE: kalman_covariance <= write_value;
+                        REG_KALMAN_SAMPLE: update_kalman(write_value);
                         default: begin
                         end
                     endcase

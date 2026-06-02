@@ -41,8 +41,18 @@ REG_PULSE_P13_PERIOD = const(0x32)
 REG_PULSE_P20_PERIOD = const(0x33)
 REG_PULSE_CONTROL = const(0x34)
 
+REG_KALMAN_CONTROL = const(0x40)
+REG_KALMAN_GAIN = const(0x41)
+REG_KALMAN_PROCESS_NOISE = const(0x42)
+REG_KALMAN_ESTIMATE = const(0x43)
+REG_KALMAN_COVARIANCE = const(0x44)
+REG_KALMAN_SAMPLE = const(0x45)
+REG_KALMAN_RESIDUAL = const(0x46)
+REG_KALMAN_COUNT = const(0x47)
+
 IRQ_CPU = const(0x01)
 IRQ_PULSE = const(0x02)
+_Q16_SCALE = const(65536)
 
 
 class RPGACompanion:
@@ -67,6 +77,12 @@ class RPGACompanion:
         tx[1] = register & 0xFF
         tx[2:6] = value.to_bytes(4, "big")
         self._transfer(tx)
+
+    def read_q16(self, register):
+        return self._from_q16(self.read_u32(register))
+
+    def write_q16(self, register, value):
+        self.write_u32(register, self._to_q16(value))
 
     @property
     def core_id(self):
@@ -202,6 +218,45 @@ class RPGACompanion:
     def pulse_periods(self):
         return {"P13": self.read_u32(REG_PULSE_P13_PERIOD), "P20": self.read_u32(REG_PULSE_P20_PERIOD)}
 
+    def reset_kalman(self):
+        control = self.read_u32(REG_KALMAN_CONTROL)
+        self.write_u32(REG_KALMAN_CONTROL, control | 0x02)
+        self.write_u32(REG_KALMAN_CONTROL, control & ~0x02)
+
+    def configure_kalman(self, *, gain=None, process_noise=None, estimate=None, covariance=None):
+        if gain is not None:
+            if gain < 0:
+                gain = 0
+            if gain >= 1:
+                gain = 0.9999847412109375
+            self.write_u32(REG_KALMAN_GAIN, int(gain * _Q16_SCALE) & 0xFFFF)
+        if process_noise is not None:
+            self.write_q16(REG_KALMAN_PROCESS_NOISE, process_noise)
+        if estimate is not None:
+            self.write_q16(REG_KALMAN_ESTIMATE, estimate)
+        if covariance is not None:
+            self.write_q16(REG_KALMAN_COVARIANCE, covariance)
+
+    def push_kalman_sample(self, sample):
+        self.write_q16(REG_KALMAN_SAMPLE, sample)
+        return self.kalman_estimate
+
+    @property
+    def kalman_estimate(self):
+        return self.read_q16(REG_KALMAN_ESTIMATE)
+
+    @property
+    def kalman_covariance(self):
+        return self.read_q16(REG_KALMAN_COVARIANCE)
+
+    @property
+    def kalman_residual(self):
+        return self.read_q16(REG_KALMAN_RESIDUAL)
+
+    @property
+    def kalman_count(self):
+        return self.read_u32(REG_KALMAN_COUNT)
+
     def _transfer(self, tx, rx=None):
         while not self.spi.try_lock():
             pass
@@ -222,6 +277,20 @@ class RPGACompanion:
         finally:
             self.cs.value = True
             self.spi.unlock()
+
+    @staticmethod
+    def _to_q16(value):
+        raw = int(value * _Q16_SCALE)
+        if raw < 0:
+            raw = (1 << 32) + raw
+        return raw & 0xFFFFFFFF
+
+    @staticmethod
+    def _from_q16(raw):
+        raw &= 0xFFFFFFFF
+        if raw & 0x80000000:
+            raw -= 1 << 32
+        return raw / _Q16_SCALE
 
 
 def instr(opcode, rd=0, rs=0, rt=0, imm=0):

@@ -56,6 +56,10 @@ print("regs:", tuple(hex(value) for value in fpga.cpu_regs))
 print("out:", fpga.cpu_out)
 print("data[2]:", fpga.read_data_word(2))
 
+fpga.configure_kalman(gain=0.125, process_noise=0.01, estimate=0.0, covariance=1.0)
+for sample in (10.0, 10.5, 9.75, 11.0):
+    print("kalman:", sample, fpga.push_kalman_sample(sample), fpga.kalman_residual)
+
 fpga.use_cpu_rgb = True
 print("pulse counts:", fpga.pulse_counts)
 print("pulse periods:", fpga.pulse_periods)
