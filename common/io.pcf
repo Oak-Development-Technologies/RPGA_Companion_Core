@@ -1,0 +1,23 @@
+# RPGA Feather iCE5LP4K pin constraints.
+# Source pin map mirrored from the sister ice40_spi_io_expander/common/io.pcf.
+
+# PICO to ICE sideband pins
+set_io clk 2
+set_io enable 3
+set_io data 4
+set_io data_out 6
+
+# RGB LED
+set_io RGB[2] 41
+set_io RGB[1] 40
+set_io RGB[0] 39
+
+# Direct inputs
+set_io P13 13
+set_io P20 20
+
+# SPI from RP2040 to FPGA
+set_io SPI_SS 16
+set_io SPI_SCK 15
+set_io SPI_MOSI 17
+set_io SPI_MISO 14

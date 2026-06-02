@@ -1,0 +1,7 @@
+build/
+build/*.bin
+build/*.asc
+build/*.json
+build/*.rpt
+__pycache__/
+*.pyc
