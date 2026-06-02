@@ -1,6 +1,6 @@
 PROJECT := rpga_companion_core
 TOP := rpga_companion_core
-DEVICE ?= up5k
+DEVICE ?= u4k
 PACKAGE ?= sg48
 PCF := common/io.pcf
 RTL := rtl/rpga_companion_core.v

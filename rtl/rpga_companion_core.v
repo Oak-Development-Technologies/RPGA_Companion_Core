@@ -21,27 +21,9 @@ module rpga_companion_core (
     wire [2:0] rgb_out;
 
     reg [31:0] sys_counter = 32'd0;
-    reg p13_d = 1'b0;
-    reg p20_d = 1'b0;
-    reg [31:0] p13_edges = 32'd0;
-    reg [31:0] p20_edges = 32'd0;
-    reg [31:0] p13_last_edge = 32'd0;
-    reg [31:0] p20_last_edge = 32'd0;
 
     always @(posedge clk) begin
         sys_counter <= sys_counter + 32'd1;
-        p13_d <= P13;
-        p20_d <= P20;
-
-        if (P13 != p13_d) begin
-            p13_edges <= p13_edges + 32'd1;
-            p13_last_edge <= sys_counter;
-        end
-
-        if (P20 != p20_d) begin
-            p20_edges <= p20_edges + 32'd1;
-            p20_last_edge <= sys_counter;
-        end
     end
 
     assign RGB = rgb_out;
@@ -57,12 +39,10 @@ module rpga_companion_core (
         .control(control),
         .rgb_out(rgb_out),
         .irq_out(irq_out),
+        .p13(P13),
+        .p20(P20),
         .gpio_status({30'd0, P20, P13}),
-        .sys_counter(sys_counter),
-        .p13_edges(p13_edges),
-        .p20_edges(p20_edges),
-        .p13_last_edge(p13_last_edge),
-        .p20_last_edge(p20_last_edge)
+        .sys_counter(sys_counter)
     );
 endmodule
 
@@ -77,12 +57,10 @@ module rpga_spi_registers (
     output reg  [31:0] control = 32'h00000000,
     output wire [2:0] rgb_out,
     output wire irq_out,
+    input  wire p13,
+    input  wire p20,
     input  wire [31:0] gpio_status,
-    input  wire [31:0] sys_counter,
-    input  wire [31:0] p13_edges,
-    input  wire [31:0] p20_edges,
-    input  wire [31:0] p13_last_edge,
-    input  wire [31:0] p20_last_edge
+    input  wire [31:0] sys_counter
 );
     localparam [7:0] CMD_READ  = 8'h00;
     localparam [7:0] CMD_WRITE = 8'h80;
@@ -130,21 +108,27 @@ module rpga_spi_registers (
     localparam [7:0] REG_STATS_MAX = 8'h43;
     localparam [7:0] REG_STATS_SUM_LO = 8'h44;
     localparam [7:0] REG_STATS_SUM_HI = 8'h45;
+    localparam [7:0] REG_STATS_LAST = 8'h46;
 
     localparam [7:0] REG_PULSE_P13_COUNT = 8'h50;
     localparam [7:0] REG_PULSE_P20_COUNT = 8'h51;
     localparam [7:0] REG_PULSE_P13_LAST = 8'h52;
     localparam [7:0] REG_PULSE_P20_LAST = 8'h53;
+    localparam [7:0] REG_PULSE_CONTROL = 8'h54;
+    localparam [7:0] REG_PULSE_P13_PERIOD = 8'h55;
+    localparam [7:0] REG_PULSE_P20_PERIOD = 8'h56;
 
     localparam [7:0] REG_PWM_CONTROL = 8'h60;
     localparam [7:0] REG_PWM_PERIOD = 8'h61;
     localparam [7:0] REG_PWM_DUTY_R = 8'h62;
     localparam [7:0] REG_PWM_DUTY_G = 8'h63;
     localparam [7:0] REG_PWM_DUTY_B = 8'h64;
+    localparam [7:0] REG_PWM_COUNTER = 8'h65;
 
     localparam [7:0] REG_CRC_CONTROL = 8'h70;
     localparam [7:0] REG_CRC_VALUE = 8'h71;
     localparam [7:0] REG_CRC_DATA = 8'h72;
+    localparam [7:0] REG_CRC_SEED = 8'h73;
 
     localparam [7:0] REG_MAILBOX_CONTROL = 8'h80;
     localparam [7:0] REG_MAILBOX_STATUS = 8'h81;
@@ -202,6 +186,17 @@ module rpga_spi_registers (
     reg signed [31:0] stats_min = 32'sh7FFFFFFF;
     reg signed [31:0] stats_max = 32'sh80000000;
     reg signed [63:0] stats_sum = 64'sh0000000000000000;
+    reg signed [31:0] stats_last = 32'sh00000000;
+
+    reg p13_d = 1'b0;
+    reg p20_d = 1'b0;
+    reg [31:0] p13_edges = 32'h00000000;
+    reg [31:0] p20_edges = 32'h00000000;
+    reg [31:0] p13_last_edge = 32'h00000000;
+    reg [31:0] p20_last_edge = 32'h00000000;
+    reg [31:0] p13_period = 32'h00000000;
+    reg [31:0] p20_period = 32'h00000000;
+    reg pulse_reset = 1'b0;
 
     reg [31:0] pwm_control = 32'h00000000;
     reg [31:0] pwm_period = 32'h00000100;
@@ -211,6 +206,7 @@ module rpga_spi_registers (
     reg [31:0] pwm_counter = 32'h00000000;
 
     reg [31:0] crc_value = 32'hFFFFFFFF;
+    reg [31:0] crc_seed = 32'hFFFFFFFF;
 
     reg [31:0] mailbox_control = 32'h00000000;
     reg [31:0] mailbox_status = 32'h00000000;
@@ -238,6 +234,30 @@ module rpga_spi_registers (
     } : control[2:0];
 
     always @(posedge clk) begin
+        p13_d <= p13;
+        p20_d <= p20;
+
+        if (pulse_reset) begin
+            p13_edges <= 32'h00000000;
+            p20_edges <= 32'h00000000;
+            p13_last_edge <= 32'h00000000;
+            p20_last_edge <= 32'h00000000;
+            p13_period <= 32'h00000000;
+            p20_period <= 32'h00000000;
+        end else begin
+            if (p13 != p13_d) begin
+                p13_edges <= p13_edges + 32'd1;
+                p13_period <= sys_counter - p13_last_edge;
+                p13_last_edge <= sys_counter;
+            end
+
+            if (p20 != p20_d) begin
+                p20_edges <= p20_edges + 32'd1;
+                p20_period <= sys_counter - p20_last_edge;
+                p20_last_edge <= sys_counter;
+            end
+        end
+
         if (pwm_control[0]) begin
             if (pwm_counter >= pwm_period - 32'd1) begin
                 pwm_counter <= 32'd0;
@@ -278,7 +298,7 @@ module rpga_spi_registers (
         begin
             case (reg_address)
                 REG_ID: read_register = 32'h52504741; // "RPGA"
-                REG_VERSION: read_register = 32'h00030000;
+                REG_VERSION: read_register = 32'h00040000;
                 REG_SCRATCH: read_register = scratch;
                 REG_CONTROL: read_register = control;
                 REG_GPIO_STATUS: read_register = gpio_status;
@@ -316,18 +336,24 @@ module rpga_spi_registers (
                 REG_STATS_MAX: read_register = stats_max;
                 REG_STATS_SUM_LO: read_register = stats_sum[31:0];
                 REG_STATS_SUM_HI: read_register = stats_sum[63:32];
+                REG_STATS_LAST: read_register = stats_last;
                 REG_PULSE_P13_COUNT: read_register = p13_edges;
                 REG_PULSE_P20_COUNT: read_register = p20_edges;
                 REG_PULSE_P13_LAST: read_register = p13_last_edge;
                 REG_PULSE_P20_LAST: read_register = p20_last_edge;
+                REG_PULSE_CONTROL: read_register = 32'h00000000;
+                REG_PULSE_P13_PERIOD: read_register = p13_period;
+                REG_PULSE_P20_PERIOD: read_register = p20_period;
                 REG_PWM_CONTROL: read_register = pwm_control;
                 REG_PWM_PERIOD: read_register = pwm_period;
                 REG_PWM_DUTY_R: read_register = pwm_duty_r;
                 REG_PWM_DUTY_G: read_register = pwm_duty_g;
                 REG_PWM_DUTY_B: read_register = pwm_duty_b;
+                REG_PWM_COUNTER: read_register = pwm_counter;
                 REG_CRC_CONTROL: read_register = 32'h00000000;
                 REG_CRC_VALUE: read_register = ~crc_value;
                 REG_CRC_DATA: read_register = 32'h00000000;
+                REG_CRC_SEED: read_register = ~crc_seed;
                 REG_MAILBOX_CONTROL: read_register = mailbox_control;
                 REG_MAILBOX_STATUS: read_register = mailbox_status;
                 REG_MAILBOX_COMMAND: read_register = mailbox_command;
@@ -392,6 +418,7 @@ module rpga_spi_registers (
             stats_min <= 32'sh7FFFFFFF;
             stats_max <= 32'sh80000000;
             stats_sum <= 64'sh0000000000000000;
+            stats_last <= 32'sh00000000;
         end
     endtask
 
@@ -439,6 +466,7 @@ module rpga_spi_registers (
 
             if (algo_control[0] && algo_enable[3]) begin
                 sample_extended = {{32{sample_value[31]}}, sample_value};
+                stats_last <= sample_value;
                 if (stats_count == 32'd0) begin
                     stats_min <= sample_value;
                     stats_max <= sample_value;
@@ -469,8 +497,8 @@ module rpga_spi_registers (
                 end
                 8'h01: begin
                     process_sample(mailbox_arg0);
-                    mailbox_result0 <= kalman_estimate;
-                    mailbox_result1 <= ema_value;
+                    mailbox_result0 <= mailbox_arg0;
+                    mailbox_result1 <= stats_count + 32'd1;
                 end
                 8'h02: begin
                     mailbox_result0 <= fifo_status_word();
@@ -479,6 +507,14 @@ module rpga_spi_registers (
                 8'h03: begin
                     mailbox_result0 <= next_crc32(crc_value, mailbox_arg0);
                     mailbox_result1 <= 32'h00000000;
+                end
+                8'h04: begin
+                    mailbox_result0 <= mailbox_arg0 + mailbox_arg1;
+                    mailbox_result1 <= mailbox_arg0 ^ mailbox_arg1;
+                end
+                8'h05: begin
+                    mailbox_result0 <= {p13_edges[15:0], p20_edges[15:0]};
+                    mailbox_result1 <= p13_period;
                 end
                 default: begin
                     mailbox_result0 <= 32'hFFFFFFFF;
@@ -494,6 +530,7 @@ module rpga_spi_registers (
         if (ss) begin
             bit_count <= 6'd0;
             write_shift <= 32'h00000000;
+            pulse_reset <= 1'b0;
         end else begin
             if (bit_count < 6'd8) begin
                 command <= {command[6:0], mosi};
@@ -557,6 +594,11 @@ module rpga_spi_registers (
                                 reset_processing;
                             end
                         end
+                        REG_PULSE_CONTROL: begin
+                            if (write_value[0]) begin
+                                pulse_reset <= 1'b1;
+                            end
+                        end
                         REG_PWM_CONTROL: pwm_control <= write_value;
                         REG_PWM_PERIOD: pwm_period <= (write_value == 32'd0) ? 32'd1 : write_value;
                         REG_PWM_DUTY_R: pwm_duty_r <= write_value;
@@ -564,11 +606,15 @@ module rpga_spi_registers (
                         REG_PWM_DUTY_B: pwm_duty_b <= write_value;
                         REG_CRC_CONTROL: begin
                             if (write_value[0]) begin
-                                crc_value <= 32'hFFFFFFFF;
+                                crc_value <= crc_seed;
                             end
                         end
                         REG_CRC_VALUE: crc_value <= ~write_value;
                         REG_CRC_DATA: crc_value <= next_crc32(crc_value, write_value);
+                        REG_CRC_SEED: begin
+                            crc_seed <= ~write_value;
+                            crc_value <= ~write_value;
+                        end
                         REG_MAILBOX_CONTROL: begin
                             mailbox_control <= write_value;
                             if (write_value[0]) begin

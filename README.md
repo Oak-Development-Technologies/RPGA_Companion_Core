@@ -62,7 +62,7 @@ ignored.
 | Address | Name | Access | Description |
 | ---: | --- | --- | --- |
 | `0x00` | `ID` | RO | Constant `0x52504741`, ASCII `RPGA` |
-| `0x01` | `VERSION` | RO | Core version, currently `0x00030000` |
+| `0x01` | `VERSION` | RO | Core version, currently `0x00040000` |
 | `0x02` | `SCRATCH` | RW | General 32-bit test register |
 | `0x03` | `CONTROL` | RW | Bits `[2:0]` drive RGB when PWM is off; bit 8 selects legacy `data_out` |
 | `0x04` | `GPIO_STATUS` | RO | Bit 0 is `P13`, bit 1 is `P20` |
@@ -100,18 +100,24 @@ ignored.
 | `0x43` | `STATS_MAX` | RO | Signed Q16.16 maximum |
 | `0x44` | `STATS_SUM_LO` | RO | Low word of signed Q48.16 sum |
 | `0x45` | `STATS_SUM_HI` | RO | High word of signed Q48.16 sum |
+| `0x46` | `STATS_LAST` | RO | Last sample included in stats |
 | `0x50` | `PULSE_P13_COUNT` | RO | Edge count on `P13` sampled by `clk` |
 | `0x51` | `PULSE_P20_COUNT` | RO | Edge count on `P20` sampled by `clk` |
 | `0x52` | `PULSE_P13_LAST` | RO | `COUNTER` value at last `P13` edge |
 | `0x53` | `PULSE_P20_LAST` | RO | `COUNTER` value at last `P20` edge |
+| `0x54` | `PULSE_CONTROL` | WO | Bit 0 resets pulse counters and periods |
+| `0x55` | `PULSE_P13_PERIOD` | RO | Counter ticks between the last two `P13` edges |
+| `0x56` | `PULSE_P20_PERIOD` | RO | Counter ticks between the last two `P20` edges |
 | `0x60` | `PWM_CONTROL` | RW | Bit 0 enables RGB PWM |
 | `0x61` | `PWM_PERIOD` | RW | PWM period in `clk` cycles |
 | `0x62` | `PWM_DUTY_R` | RW | Red duty in `clk` cycles |
 | `0x63` | `PWM_DUTY_G` | RW | Green duty in `clk` cycles |
 | `0x64` | `PWM_DUTY_B` | RW | Blue duty in `clk` cycles |
+| `0x65` | `PWM_COUNTER` | RO | Current PWM counter value |
 | `0x70` | `CRC_CONTROL` | WO | Bit 0 resets CRC32 state |
 | `0x71` | `CRC_VALUE` | RO | Current finalized CRC32 |
 | `0x72` | `CRC_DATA` | WO | Fold one 32-bit word into CRC32 |
+| `0x73` | `CRC_SEED` | RW | Finalized CRC seed value, default `0x00000000` |
 | `0x80` | `MAILBOX_CONTROL` | RW | Bit 0 runs command, bit 1 clears done |
 | `0x81` | `MAILBOX_STATUS` | RO | Bit 1 indicates done |
 | `0x82` | `MAILBOX_COMMAND` | RW | Command ID |
@@ -161,9 +167,26 @@ IRQ bits are:
 | 3 | Mailbox command done |
 | 4 | Sample processed |
 
-The mailbox is intentionally tiny. Command `0x01` processes `ARG0` as one sample,
-command `0x02` returns FIFO/algo status, and command `0x03` previews CRC32 after
-folding `ARG0`.
+Ideas 6 through 10 are implemented as small peripherals:
+
+| Feature | Registers | Notes |
+| --- | --- | --- |
+| Stats accumulator | `0x40`-`0x46` | Tracks count, min, max, last, sum, and driver-side mean |
+| Pulse timing | `0x50`-`0x56` | Counts edges and records last period in `clk` ticks |
+| RGB PWM | `0x60`-`0x65` | Uses `clk` as the PWM timebase |
+| CRC32 | `0x70`-`0x73` | IEEE reflected polynomial `0xEDB88320`, one word per write |
+| Mailbox | `0x80`-`0x86` | Small command/argument/result interface |
+
+Mailbox commands:
+
+| Command | Result |
+| ---: | --- |
+| `0x00` | No-op |
+| `0x01` | Process `ARG0` as one Q16.16 sample; returns sample and expected stats count |
+| `0x02` | Return FIFO status and enabled algorithm mask |
+| `0x03` | Preview CRC32 after folding `ARG0` |
+| `0x04` | Return `ARG0 + ARG1` and `ARG0 ^ ARG1` |
+| `0x05` | Return packed pulse edge counts and latest `P13` period |
 
 ## Build
 
@@ -223,7 +246,7 @@ cs = digitalio.DigitalInOut(board.D10)
 fpga = RPGACompanion(spi, cs, baudrate=1_000_000)
 
 print(hex(fpga.core_id))      # 0x52504741
-print(hex(fpga.version))      # 0x00030000
+print(hex(fpga.version))      # 0x00040000
 
 fpga.scratch = 0x12345678
 print(hex(fpga.scratch))
@@ -244,6 +267,13 @@ for sample in (10.0, 10.5, 9.75, 11.0, 10.25):
     print(sample, fpga.kalman_estimate, fpga.ema_value, fpga.threshold_flags)
 
 print(fpga.stats)
+print(fpga.pulse_counts, fpga.pulse_periods)
+
+fpga.set_rgb_pwm(period=256, red=32, green=128, blue=255)
+fpga.crc_reset(seed=0)
+print(hex(fpga.crc_update_u32(0x12345678)))
+print(hex(fpga.crc_update_bytes(b"RPGA")))
+print(fpga.mailbox_add_xor(0x1234, 0x00FF))
 ```
 
 There is also a runnable example at

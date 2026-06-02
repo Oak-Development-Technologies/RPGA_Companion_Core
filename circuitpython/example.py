@@ -49,9 +49,17 @@ for sample in (10.0, 10.5, 9.75, 11.0, 10.25):
     fpga.clear_irqs()
 
 print("stats:", fpga.stats)
-fpga.crc_reset()
+print("pulse counts:", fpga.pulse_counts)
+print("pulse periods:", fpga.pulse_periods)
+
+fpga.set_rgb_pwm(period=256, red=32, green=128, blue=255)
+print("pwm counter:", fpga.pwm_counter)
+
+fpga.crc_reset(seed=0)
 print("crc:", hex(fpga.crc_update_u32(0x12345678)))
-print("mailbox:", fpga.mailbox_run(0x02))
+print("crc bytes:", hex(fpga.crc_update_bytes(b"RPGA")))
+print("mailbox status:", fpga.mailbox_status_summary())
+print("mailbox add/xor:", fpga.mailbox_add_xor(0x1234, 0x00FF))
 
 while True:
     for color in range(8):

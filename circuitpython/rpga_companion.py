@@ -48,18 +48,24 @@ REG_STATS_MIN = const(0x42)
 REG_STATS_MAX = const(0x43)
 REG_STATS_SUM_LO = const(0x44)
 REG_STATS_SUM_HI = const(0x45)
+REG_STATS_LAST = const(0x46)
 REG_PULSE_P13_COUNT = const(0x50)
 REG_PULSE_P20_COUNT = const(0x51)
 REG_PULSE_P13_LAST = const(0x52)
 REG_PULSE_P20_LAST = const(0x53)
+REG_PULSE_CONTROL = const(0x54)
+REG_PULSE_P13_PERIOD = const(0x55)
+REG_PULSE_P20_PERIOD = const(0x56)
 REG_PWM_CONTROL = const(0x60)
 REG_PWM_PERIOD = const(0x61)
 REG_PWM_DUTY_R = const(0x62)
 REG_PWM_DUTY_G = const(0x63)
 REG_PWM_DUTY_B = const(0x64)
+REG_PWM_COUNTER = const(0x65)
 REG_CRC_CONTROL = const(0x70)
 REG_CRC_VALUE = const(0x71)
 REG_CRC_DATA = const(0x72)
+REG_CRC_SEED = const(0x73)
 REG_MAILBOX_CONTROL = const(0x80)
 REG_MAILBOX_STATUS = const(0x81)
 REG_MAILBOX_COMMAND = const(0x82)
@@ -225,6 +231,13 @@ class RPGACompanion:
         """Reset all FPGA-side algorithm accumulators."""
         self.reset_kalman()
 
+    def reset_stats(self):
+        """Reset stats along with the processing accumulators."""
+        self.write_u32(REG_STATS_CONTROL, 0x01)
+
+    def reset_pulse_counters(self):
+        self.write_u32(REG_PULSE_CONTROL, 0x01)
+
     def configure_kalman(
         self,
         *,
@@ -284,11 +297,30 @@ class RPGACompanion:
         self.write_u32(REG_PWM_DUTY_B, int(blue))
         self.write_u32(REG_PWM_CONTROL, 1 if enable else 0)
 
-    def crc_reset(self):
+    def disable_rgb_pwm(self):
+        self.write_u32(REG_PWM_CONTROL, 0)
+
+    def crc_reset(self, seed=None):
+        if seed is not None:
+            self.write_u32(REG_CRC_SEED, seed)
         self.write_u32(REG_CRC_CONTROL, 0x01)
 
     def crc_update_u32(self, value):
         self.write_u32(REG_CRC_DATA, value)
+        return self.read_u32(REG_CRC_VALUE)
+
+    def crc_update_bytes(self, data):
+        word = 0
+        count = 0
+        for byte in data:
+            word |= (byte & 0xFF) << (8 * count)
+            count += 1
+            if count == 4:
+                self.write_u32(REG_CRC_DATA, word)
+                word = 0
+                count = 0
+        if count:
+            self.write_u32(REG_CRC_DATA, word)
         return self.read_u32(REG_CRC_VALUE)
 
     def mailbox_run(self, command, arg0=0, arg1=0):
@@ -297,6 +329,22 @@ class RPGACompanion:
         self.write_u32(REG_MAILBOX_ARG1, arg1)
         self.write_u32(REG_MAILBOX_CONTROL, 0x01)
         return (self.read_u32(REG_MAILBOX_RESULT0), self.read_u32(REG_MAILBOX_RESULT1))
+
+    def mailbox_process_sample(self, sample):
+        result = self.mailbox_run(0x01, self._to_q16(sample), 0)
+        return (self._from_q16(result[0]), result[1])
+
+    def mailbox_status_summary(self):
+        return self.mailbox_run(0x02)
+
+    def mailbox_crc_preview(self, value):
+        return self.mailbox_run(0x03, value, 0)[0]
+
+    def mailbox_add_xor(self, arg0, arg1):
+        return self.mailbox_run(0x04, arg0, arg1)
+
+    def mailbox_pulse_summary(self):
+        return self.mailbox_run(0x05)
 
     @property
     def kalman_gain(self):
@@ -350,6 +398,7 @@ class RPGACompanion:
             "count": count,
             "min": self.read_q16(REG_STATS_MIN),
             "max": self.read_q16(REG_STATS_MAX),
+            "last": self.read_q16(REG_STATS_LAST),
             "sum": total,
             "mean": total / count if count else 0,
         }
@@ -361,6 +410,18 @@ class RPGACompanion:
     @property
     def pulse_last_edges(self):
         return {"P13": self.read_u32(REG_PULSE_P13_LAST), "P20": self.read_u32(REG_PULSE_P20_LAST)}
+
+    @property
+    def pulse_periods(self):
+        return {"P13": self.read_u32(REG_PULSE_P13_PERIOD), "P20": self.read_u32(REG_PULSE_P20_PERIOD)}
+
+    @property
+    def pwm_counter(self):
+        return self.read_u32(REG_PWM_COUNTER)
+
+    @property
+    def crc_value(self):
+        return self.read_u32(REG_CRC_VALUE)
 
     def _transfer(self, tx, rx=None):
         while not self.spi.try_lock():
