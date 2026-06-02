@@ -28,9 +28,9 @@ and directly instantiates one `SB_MAC16` block.
 | `SPI_SCK` | 15 | input | SPI clock |
 | `SPI_MOSI` | 17 | input | SPI data from RP2040 |
 | `SPI_MISO` | 14 | output | SPI data to RP2040 |
-| `clk` | 2 | input | External sideband clock, currently unused by the internal CPU clock |
-| `enable` | 3 | input | Legacy sideband input |
-| `data` | 4 | input | Legacy sideband input |
+| `clk` | 2 | input | RPGA Feather `F2`; external sideband clock, currently unused by the internal CPU clock |
+| `enable` | 3 | input | RPGA Feather `F3`; legacy sideband input |
+| `data` | 4 | input | RPGA Feather `F4`; legacy sideband input |
 | `data_out` | 6 | output | IRQ output by default |
 | `RGB[2:0]` | 41, 40, 39 | output | Direct `CONTROL[2:0]` or `CPU_OUT[2:0]` |
 | `P13` | 13 | input | Direct input and pulse counter |
@@ -196,14 +196,56 @@ FREQ ?= 16
 The synthesis command includes `synth_ice40 -dsp -abc2`. The place-and-route
 and timing targets default to 16 MHz.
 
+## Simulation
+
+The repo includes a cocotb bench for the SPI register interface, CPU loader/run
+path, data RAM, IRQ output, and DSP-backed Kalman update. The bench uses
+behavioral simulation stubs for the iCE40 hard macros in [sim/ice40_cells_sim.v](sim/ice40_cells_sim.v).
+
+Install cocotb and a supported Verilog simulator, such as Icarus Verilog, then
+run:
+
+```sh
+make sim
+```
+
+The default cocotb simulator is `icarus`; override it with `SIM=...` if needed:
+
+```sh
+make sim SIM=verilator
+```
+
 ## CircuitPython Usage
 
-Copy [circuitpython/rpga_companion.py](circuitpython/rpga_companion.py) to your
-CircuitPython board.
+Copy [circuitpython/rpga_companion.py](circuitpython/rpga_companion.py), the
+Oakdevtech IcePython library, and the built bitstream to your CircuitPython
+board. The runnable example expects the bitstream at `top.bin`; copy or rename
+`build/rpga_companion_core.bin` to that name on CIRCUITPY. The RPGA Feather
+example programs the FPGA before opening the companion SPI register interface:
 
 ```python
+import board
+import busio
+import digitalio
+import oakdevtech_icepython
+import time
+
 from rpga_companion import RPGACompanion, add, halt, ldi, load, out, store
 
+spi = busio.SPI(clock=board.F_SCK, MOSI=board.F_MOSI, MISO=board.F_MISO)
+iceprog = oakdevtech_icepython.Oakdevtech_icepython(
+    spi, board.F_CSN, board.F_RST, "top.bin"
+)
+iceprog.program_fpga()
+
+sideband_clk = digitalio.DigitalInOut(board.F2)
+sideband_enable = digitalio.DigitalInOut(board.F3)
+sideband_data = digitalio.DigitalInOut(board.F4)
+sideband_clk.switch_to_output(value=False)
+sideband_enable.switch_to_output(value=False)
+sideband_data.switch_to_output(value=False)
+
+cs = digitalio.DigitalInOut(board.F_CSN)
 fpga = RPGACompanion(spi, cs)
 
 program = (

@@ -2,6 +2,7 @@ import board
 import busio
 import digitalio
 import time
+import oakdevtech_icepython
 
 from rpga_companion import (
     IRQ_CPU,
@@ -15,8 +16,32 @@ from rpga_companion import (
 )
 
 
-spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
-cs = digitalio.DigitalInOut(board.D10)
+BITSTREAM = "top.bin"
+
+
+spi = busio.SPI(clock=board.F_SCK, MOSI=board.F_MOSI, MISO=board.F_MISO)
+
+iceprog = oakdevtech_icepython.Oakdevtech_icepython(
+    spi,
+    board.F_CSN,
+    board.F_RST,
+    BITSTREAM,
+)
+
+timestamp = time.monotonic()
+iceprog.program_fpga()
+endstamp = time.monotonic()
+
+print("programmed FPGA from", BITSTREAM, "in", endstamp - timestamp, "seconds")
+
+sideband_clk = digitalio.DigitalInOut(board.F2)
+sideband_enable = digitalio.DigitalInOut(board.F3)
+sideband_data = digitalio.DigitalInOut(board.F4)
+sideband_clk.switch_to_output(value=False)
+sideband_enable.switch_to_output(value=False)
+sideband_data.switch_to_output(value=False)
+
+cs = digitalio.DigitalInOut(board.F_CSN)
 fpga = RPGACompanion(spi, cs)
 
 print("core id:", hex(fpga.core_id))

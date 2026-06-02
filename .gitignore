@@ -5,3 +5,6 @@ build/*.json
 build/*.rpt
 __pycache__/
 *.pyc
+tests/sim_build/
+tests/results.xml
+tests/*.vcd

@@ -7,7 +7,7 @@ PCF := common/io.pcf
 RTL := rtl/ram.v rtl/dsp_mac16.v rtl/tiny_cpu.v rtl/rpga_companion_core.v
 BUILD := build
 
-.PHONY: all clean prog timing
+.PHONY: all clean prog sim timing
 
 all: $(BUILD)/$(PROJECT).bin
 
@@ -25,6 +25,9 @@ $(BUILD)/$(PROJECT).bin: $(BUILD)/$(PROJECT).asc
 
 timing: $(BUILD)/$(PROJECT).asc
 	icetime -d $(DEVICE) -c $(FREQ) -mtr $(BUILD)/$(PROJECT).rpt $<
+
+sim:
+	$(MAKE) -C tests
 
 prog: $(BUILD)/$(PROJECT).bin
 	iceprog $<
